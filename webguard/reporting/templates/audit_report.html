@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ report_name }}</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f1f5f9;
+            color: #1e293b;
+            margin: 0;
+        }
+
+        header {
+            background: #0f172a;
+            color: white;
+            padding: 30px;
+        }
+
+        main {
+            max-width: 1200px;
+            margin: auto;
+            padding: 25px;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            border: 1px solid #e2e8f0;
+            margin-bottom: 15px;
+            overflow-wrap: anywhere;
+        }
+
+        .card h3 {
+            color: #64748b;
+            margin-top: 0;
+        }
+
+        .value {
+            font-size: 32px;
+            font-weight: bold;
+        }
+
+        .CRITICAL, .HIGH { color: #dc2626; }
+        .MEDIUM { color: #d97706; }
+        .LOW { color: #a16207; }
+        .INFO { color: #64748b; }
+
+        section {
+            margin-top: 30px;
+        }
+
+        .severity-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            border-bottom: 1px solid #e2e8f0;
+            font-weight: bold;
+        }
+
+        .severity-row:last-child {
+            border-bottom: none;
+        }
+
+        .severity-count {
+            font-size: 22px;
+        }
+
+        .PASS, .COMPLETED { color: #15803d; }
+        .FAIL { color: #dc2626; }
+        .NOT_CHECKED { color: #64748b; }
+        .INCOMPLETE { color: #d97706; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        th, td {
+            padding: 14px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        th {
+            background: #0f172a;
+            color: white;
+        }
+
+        .table-container {
+            overflow-x: auto;
+        }
+
+        footer {
+            text-align: center;
+            color: #64748b;
+            padding: 25px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+
+<body>
+
+<header>
+    <h1>{{ report_name }}</h1>
+    <p>Web Security Assessment Report</p>
+    <small>Generated: {{ generated_at }}</small>
+</header>
+
+<main>
+
+    <!-- Risk Overview -->
+
+    <h2>Risk Overview</h2>
+
+    <div class="dashboard">
+        <div class="card">
+            <h3>Total Findings</h3>
+            <div class="value">
+                {{ risk_summary.total_findings }}
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Total Risk Score</h3>
+            <div class="value">
+                {{ risk_summary.total_risk_score }}
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Overall Risk Level</h3>
+            <div class="value {{ risk_summary.overall_risk_level }}">
+                {{ risk_summary.overall_risk_level }}
+            </div>
+        </div>
+    </div>
+
+    <!-- Severity Distribution -->
+
+    <section>
+        <h2>Severity Distribution</h2>
+
+        <div class="card">
+            {% for severity, count in risk_summary.severity_counts.items() %}
+            <div class="severity-row">
+                <span class="{{ severity }}">
+                    {{ severity }}
+                </span>
+
+                <span class="severity-count {{ severity }}">
+                    {{ count }}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <!-- Compliance Assessment -->
+
+    <section>
+        <h2>Compliance Assessment</h2>
+
+        <div class="dashboard">
+            <div class="card">
+                <h3>Passed</h3>
+                <div class="value PASS">
+                    {{ compliance_summary.passed }}
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>Failed</h3>
+                <div class="value FAIL">
+                    {{ compliance_summary.failed }}
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>Not Checked</h3>
+                <div class="value NOT_CHECKED">
+                    {{ compliance_summary.not_checked }}
+                </div>
+            </div>
+        </div>
+
+        <div class="card table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Policy ID</th>
+                        <th>Security Policy</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for policy in compliance_summary.policy_results %}
+                    <tr>
+                        <td>{{ policy.policy_id }}</td>
+                        <td>{{ policy.policy_name }}</td>
+                        <td class="{{ policy.status }}">
+                            <strong>{{ policy.status }}</strong>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <p>
+                NOT_CHECKED indicates insufficient audit coverage
+                and does not establish compliance.
+            </p>
+        </div>
+    </section>
+
+    <!-- Security Findings -->
+
+    <section>
+        <h2>Security Findings</h2>
+
+        {% for finding in findings %}
+        <div class="card">
+            <h3>{{ finding.title }}</h3>
+
+            <p class="{{ finding.severity }}">
+                <strong>{{ finding.severity }}</strong>
+            </p>
+
+            <p>
+                <strong>Check ID:</strong>
+                {{ finding.check_id }}
+            </p>
+
+            <p>
+                <strong>Category:</strong>
+                {{ finding.category }}
+            </p>
+
+            <p>
+                <strong>Description:</strong>
+                {{ finding.detail }}
+            </p>
+        </div>
+
+        {% else %}
+        <div class="card">
+            No security findings were reported.
+            This does not guarantee full security.
+        </div>
+        {% endfor %}
+    </section>
+
+    <!-- Audit Coverage -->
+
+    <section>
+        <h2>Audit Coverage</h2>
+
+        <div class="card table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Audit Type</th>
+                        <th>Coverage Status</th>
+                        <th>Data Quality Issues</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for audit in audit_coverage %}
+                    <tr>
+                        <td>{{ audit.audit_kind }}</td>
+                        <td class="{{ audit.coverage_status }}">
+                            {{ audit.coverage_status }}
+                        </td>
+                        <td>{{ audit.data_quality_issues }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="3">
+                            No TLS audit coverage was supplied.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <p>Completed coverage does not automatically mean compliance.</p>
+        </div>
+    </section>
+
+    <!-- Remediation Plan -->
+
+    <section>
+        <h2>Prioritised Remediation Plan</h2>
+
+        {% for action in remediation_plan %}
+        <div class="card">
+            <h3>Priority {{ action.priority }}: {{ action.title }}</h3>
+            <p class="{{ action.severity }}">
+                <strong>{{ action.severity }}</strong>
+            </p>
+            <p><strong>Recommendation:</strong> {{ action.recommendation }}</p>
+            <p><strong>Risk Score:</strong> {{ action.risk_score }}</p>
+        </div>
+        {% else %}
+        <div class="card">No remediation recommendations were generated.</div>
+        {% endfor %}
+    </section>
+
+</main>
+
+<footer>
+    WebGuard Audit | Authorised Security Assessment Only
+</footer>
+
+</body>
+</html>
