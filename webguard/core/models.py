@@ -6,7 +6,7 @@ Members 1 and 2 turn it into Findings. Member 3 scores and reports the Findings.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 SEVERITIES = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
 
@@ -35,8 +35,9 @@ class ResponseData:
 
     url: str
     status: int
-    headers: list[tuple[str, str]]   # list of pairs: duplicates (Set-Cookie) are preserved
-    body: str = ""
+    # repr=False: raw headers/body can hold secrets, so they never appear in logs or tracebacks
+    headers: list[tuple[str, str]] = field(repr=False)   # pairs: duplicates (Set-Cookie) are preserved
+    body: str = field(default="", repr=False)
 
     @property
     def is_https(self) -> bool:
