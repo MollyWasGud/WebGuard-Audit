@@ -1,0 +1,7 @@
+requests
+rich
+jinja2
+cryptography
+flask
+pytest
+ruff

@@ -221,3 +221,47 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ========================================
+# WebGuard Audit - Project-specific rules
+# ========================================
+
+# Virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Sensitive data and credentials
+.env
+.env.*
+!.env.example
+secrets/
+credentials.json
+
+# Private keys and certificate files
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Generated security audit reports
+output/
+reports/
+*.log
+
+# Testing and code quality
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE configuration
+.vscode/
+.idea/
+
+# Operating system files
+.DS_Store
+Thumbs.db
