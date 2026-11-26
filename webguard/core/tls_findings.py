@@ -3,19 +3,33 @@
 from webguard.core.models import Finding
 
 
+class _CertificateVerificationFinding(Finding):
+    def __init__(self, hostname: str | None, port: int | None, verify_code: int | None):
+        self.endpoint = None
+        if hostname is not None and port is not None:
+            authority = f"[{hostname}]" if ":" in hostname else hostname
+            self.endpoint = f"{authority}:{port}"
+        endpoint_label = self.endpoint or "Unknown endpoint"
+        super().__init__(
+            check_id="TLS:certificate-verification",
+            category="tls",
+            severity="HIGH",
+            title="Certificate verification failed",
+            detail="The TLS certificate could not be verified.",
+            remediation="Review certificate validity, trust and hostname.",
+            evidence=f"{endpoint_label} verify_code={verify_code}",
+        )
+
+    def key(self) -> str:
+        if self.endpoint is None:
+            return f"{self.check_id}|unattributed:{id(self)}"
+        return f"{self.check_id}|{self.endpoint}"
+
+
 def certificate_failure(data: dict, endpoint: dict) -> Finding:
     """Create a consistent certificate verification finding."""
-    return Finding(
-        check_id="TLS:certificate-verification",
-        category="tls",
-        severity="HIGH",
-        title="Certificate verification failed",
-        detail="The TLS certificate could not be verified.",
-        remediation="Review certificate validity, trust and hostname.",
-        evidence=(
-            f"{endpoint['hostname']}:{endpoint['port']} "
-            f"verify_code={data.get('verify_code')}"
-        ),
+    return _CertificateVerificationFinding(
+        endpoint["hostname"], endpoint["port"], data.get("verify_code")
     )
 
 

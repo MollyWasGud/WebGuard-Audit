@@ -712,6 +712,11 @@ def _protocol_probe(fields: _Fields) -> SafeProtocolProbe:
         or verify_code is not None
     ):
         raise ReportInputError
+    if outcome == "client_restricted" and (
+        code in {"certificate_verification_failed", "CERTIFICATE_VERIFY_FAILED"}
+        or verify_code is not None
+    ):
+        raise ReportInputError
     if outcome == "server_rejected" and (
         code != "TLSV1_ALERT_PROTOCOL_VERSION"
         or stage not in (None, "handshake")
@@ -918,7 +923,9 @@ def _check_redirect(
     ):
         raise ReportInputError
     if outcome == "downgrade" and (
-        source_scheme not in (None, "https") or destination_scheme not in (None, "http")
+        destination is None
+        or source_scheme not in (None, "https")
+        or destination_scheme not in (None, "http")
     ):
         raise ReportInputError
     if (

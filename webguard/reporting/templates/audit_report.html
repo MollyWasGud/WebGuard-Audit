@@ -274,6 +274,8 @@
                     <tr>
                         <th>Audit Type</th>
                         <th>Coverage Status</th>
+                        <th>First-hop Outcome</th>
+                        <th>Destination Verification</th>
                         <th>Data Quality Issues</th>
                     </tr>
                 </thead>
@@ -285,11 +287,20 @@
                         <td class="{{ audit.coverage_status }}">
                             {{ audit.coverage_status }}
                         </td>
+                        <td>
+                            {% if audit.redirect_outcome %}
+                            <span>{{ audit.redirect_outcome }}</span>
+                            {% if audit.probe_outcome and audit.probe_outcome != "available" %}
+                            <span>({{ audit.probe_outcome }})</span>
+                            {% endif %}
+                            {% else %}?{% endif %}
+                        </td>
+                        <td>{{ audit.destination_verification or "?" }}</td>
                         <td>{{ audit.data_quality_issues }}</td>
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="3">
+                        <td colspan="5">
                             No TLS audit coverage was supplied.
                         </td>
                     </tr>
@@ -297,6 +308,7 @@
                 </tbody>
             </table>
 
+            <p>Redirect coverage applies to the first hop. A destination marked not_attempted was neither contacted nor verified.</p>
             <p>Completed coverage does not automatically mean compliance.</p>
         </div>
     </section>

@@ -552,6 +552,22 @@ def test_semantic_protocol_preserves_unconfirmed_outcomes(adapter):
     assert data["recommendations"] == []
 
 
+def test_semantic_protocol_rejects_certificate_failure_as_client_restricted(adapter):
+    probe = unconfirmed_protocol(
+        "TLSv1.3", "inconclusive", "CERTIFICATE_VERIFY_FAILED", "handshake"
+    )
+    probe["verify_code"] = 62
+    raw = protocol_result(confirmed_protocol("TLSv1.2"), probe)
+    accepted = adapter("tls_protocols", raw)
+    assert accepted["issues"] == []
+    assert accepted["data"]["probes"][1]["verify_code"] == 62
+
+    probe["outcome"] = "client_restricted"
+
+    with pytest.raises(ReportInputError, match=r"^Invalid audit report input$"):
+        adapter("tls_protocols", raw)
+
+
 def test_semantic_protocol_preserves_supported_advice_and_not_probed_versions(adapter):
     tls12 = confirmed_protocol("TLSv1.2")
     tls13 = unconfirmed_protocol(
@@ -729,6 +745,20 @@ def test_semantic_redirect_preserves_consistent_first_hop(
             report["data"]["redirect"]["destination"]["verification"] == "not_attempted"
         )
     json.dumps(report, allow_nan=False)
+
+
+def test_semantic_redirect_rejects_downgrade_without_destination(adapter):
+    raw = first_hop("https", "downgrade", "http", 302, ("https_to_http_downgrade",))
+    accepted = adapter("http_redirect", raw)
+    assert accepted["issues"] == []
+    assert (
+        accepted["data"]["redirect"]["destination"]["verification"] == "not_attempted"
+    )
+
+    raw["redirect"]["destination"] = None
+
+    with pytest.raises(ReportInputError, match=r"^Invalid audit report input$"):
+        adapter("http_redirect", raw)
 
 
 def test_semantic_redirect_preserves_cross_host_and_unusual_port_advice(adapter):

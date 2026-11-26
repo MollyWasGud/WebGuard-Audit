@@ -1,7 +1,11 @@
 """Automated reporting tests for Member 3."""
 
 import json
+from unittest.mock import Mock
 
+from test_report_adapter import http_probe
+
+from webguard.auditors import https
 from webguard.core.audit_integration import integrate_audit_results
 from webguard.core.models import Finding
 from webguard.reporting.html_report import generate_html_report
@@ -107,3 +111,104 @@ def test_report_sensitive_data_protection(tmp_path, monkeypatch):
         assert "DEMO_SECRET_123" not in content
         assert "RAW_SECRET_456" not in content
         assert "[REDACTED]" in content
+
+
+def test_rejected_tls_input_is_visible_in_reports(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    marker = "SYNTHETIC_TLS_PRIVATE_41C"
+    malformed = {
+        "hostname": marker,
+        "port": 443,
+        "status": "certificate_verification_failed",
+        "verify_code": 62,
+        "error_message": f"password={marker}",
+    }
+    finding = Finding("TEST:inert", "test", "INFO", "<script>inert</script>", "", "")
+    result = integrate_audit_results(
+        [finding], [("tls_connectivity", malformed)], {"POL-009"}
+    )
+
+    json_text = generate_json_report(result).read_text(encoding="utf-8")
+    html_text = generate_html_report(result).read_text(encoding="utf-8")
+    report = json.loads(json_text)
+    json.dumps(report, allow_nan=False)
+
+    assert report["schema_version"] == 1
+    assert report["audit_coverage"] == [
+        {
+            "audit_kind": "Rejected TLS input",
+            "coverage_status": "INCOMPLETE",
+            "data_quality_issues": 1,
+        }
+    ]
+    assert report["risk_summary"]["total_risk_score"] == 0
+    assert [item["check_id"] for item in report["findings"]] == ["TEST:inert"]
+    assert "Rejected TLS input" in html_text
+    assert "INCOMPLETE" in html_text
+    assert marker not in json_text + html_text
+    assert "&lt;script&gt;inert&lt;/script&gt;" in html_text
+    assert "<script>inert</script>" not in html_text
+
+
+def test_redirect_reports_use_first_hop_outcomes_without_location_data(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    redirect_inputs = []
+    for scheme, location in (
+        (
+            "http",
+            "https://destination.test/path?token=SYNTH_41D_QUERY#SYNTH_41D_FRAGMENT",
+        ),
+        (
+            "https",
+            "http://destination.test/path?token=SYNTH_41D_QUERY#SYNTH_41D_FRAGMENT",
+        ),
+        ("https", "https://name:SYNTH_41D_PASSWORD@destination.test/"),
+    ):
+        response = http_probe() | {"http_status": 302}
+        monkeypatch.setattr(
+            https, "_probe_response_head", Mock(return_value=(response, [location]))
+        )
+        redirect_inputs.append(
+            (
+                "http_redirect",
+                https.audit_http_redirect("example.test", source_scheme=scheme),
+            )
+        )
+
+    inert = Finding("TEST:inert", "test", "INFO", "<script>inert</script>", "", "")
+    result = integrate_audit_results([inert], redirect_inputs, set())
+    json_text = generate_json_report(result).read_text(encoding="utf-8")
+    html_text = generate_html_report(result).read_text(encoding="utf-8")
+    report = json.loads(json_text)
+    json.dumps(report, allow_nan=False)
+
+    assert report["schema_version"] == 1
+    rows = report["audit_coverage"]
+    assert [row["redirect_outcome"] for row in rows] == [
+        "upgrade",
+        "downgrade",
+        "invalid_location",
+    ]
+    assert [row["coverage_status"] for row in rows] == [
+        "COMPLETED",
+        "COMPLETED",
+        "INCOMPLETE",
+    ]
+    assert [row["destination_verification"] for row in rows] == [
+        "not_attempted",
+        "not_attempted",
+        None,
+    ]
+    for outcome in ("upgrade", "downgrade", "invalid_location", "not_attempted"):
+        assert f">{outcome}<" in html_text
+    for marker in (
+        "destination.test",
+        "SYNTH_41D_QUERY",
+        "SYNTH_41D_FRAGMENT",
+        "SYNTH_41D_PASSWORD",
+    ):
+        assert marker not in json_text + html_text
+    assert "&lt;script&gt;inert&lt;/script&gt;" in html_text
+    assert "<script>inert</script>" not in html_text
