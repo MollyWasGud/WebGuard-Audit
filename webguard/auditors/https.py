@@ -9,6 +9,8 @@ from functools import partial
 from typing import Literal, TypedDict
 from urllib.parse import urlsplit
 
+from webguard.security.dialer import AuthorizedTransport
+
 from .tls import (
     _create_verified_client_context,
     _is_valid_port,
@@ -196,8 +198,10 @@ class _DirectHTTPSConnection(http.client.HTTPSConnection):
         timeout: float,
         context: ssl.SSLContext,
         cleanup: _HTTPCleanup,
+        transport: AuthorizedTransport | None = None,
     ):
         super().__init__(identity, port, timeout=timeout, context=context)
+        self._transport = transport
         self._lookup_host = lookup_host
         self._cleanup = cleanup
         self.response_class = partial(self.response_class, cleanup=cleanup)
@@ -205,10 +209,15 @@ class _DirectHTTPSConnection(http.client.HTTPSConnection):
 
     def connect(self) -> None:
         self.stage = "connect"
-        self.sock = socket.create_connection(
-            (self._lookup_host, self.port), self.timeout
+        self.sock = (
+            socket.create_connection((self._lookup_host, self.port), self.timeout)
+            if self._transport is None
+            else self._transport.connect("https", self.host, self.port, self.timeout)
         )
         self.stage = "handshake"
+        if self._transport is not None:
+            self.auto_open = 0
+            self.sock.settimeout(self._transport.checkpoint(self.timeout))
         self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
 
     def close(self) -> None:
@@ -228,16 +237,22 @@ class _DirectHTTPConnection(http.client.HTTPConnection):
         port: int,
         timeout: float,
         cleanup: _HTTPCleanup,
+        transport: AuthorizedTransport | None = None,
     ):
         super().__init__(identity, port, timeout=timeout)
+        self._transport = transport
         self._lookup_host = lookup_host
         self._cleanup = cleanup
         self.response_class = partial(self.response_class, cleanup=cleanup)
 
     def connect(self) -> None:
-        self.sock = socket.create_connection(
-            (self._lookup_host, self.port), self.timeout
+        self.sock = (
+            socket.create_connection((self._lookup_host, self.port), self.timeout)
+            if self._transport is None
+            else self._transport.connect("http", self.host, self.port, self.timeout)
         )
+        if self._transport is not None:
+            self.auto_open = 0
 
     def close(self) -> None:
         try:
@@ -257,7 +272,12 @@ def _new_response_probe() -> _ResponseProbe:
 
 
 def _probe_response_head(
-    lookup_host: str, identity: str, port: int, timeout: float, scheme: _Scheme
+    lookup_host: str,
+    identity: str,
+    port: int,
+    timeout: float,
+    scheme: _Scheme,
+    transport: AuthorizedTransport | None = None,
 ) -> tuple[_ResponseProbe, list[str]]:
     result = _new_response_probe()
     start = time.monotonic()
@@ -276,16 +296,20 @@ def _probe_response_head(
             if ssl.HAS_ALPN:
                 context.set_alpn_protocols(["http/1.1"])
             connection = _DirectHTTPSConnection(
-                lookup_host, identity, port, timeout, context, cleanup
+                lookup_host, identity, port, timeout, context, cleanup, transport
             )
         else:
             connection = _DirectHTTPConnection(
-                lookup_host, identity, port, timeout, cleanup
+                lookup_host, identity, port, timeout, cleanup, transport
             )
         connection.connect()
         stage = "request"
+        if transport is not None:
+            connection.sock.settimeout(transport.checkpoint(timeout))
         connection.request("HEAD", "/", headers={"Connection": "close"})
         stage = "response"
+        if transport is not None:
+            connection.sock.settimeout(transport.checkpoint(timeout))
         response = connection.getresponse()
         status = response.status
         if 200 <= status <= 599:
@@ -330,7 +354,11 @@ def _probe_response_head(
 
 
 def audit_https_availability(
-    hostname: str, port: int = 443, *, timeout: float = 5.0
+    hostname: str,
+    port: int = 443,
+    *,
+    timeout: float = 5.0,
+    transport: AuthorizedTransport | None = None,
 ) -> HTTPSAvailabilityResult:
     """Check whether a single HEAD request receives a final response over verified TLS."""
     result: HTTPSAvailabilityResult = {
@@ -350,7 +378,9 @@ def audit_https_availability(
         return result
     result["target"]["hostname"] = identity
 
-    probe, _ = _probe_response_head(lookup_host, identity, port, timeout, "https")
+    probe, _ = _probe_response_head(
+        lookup_host, identity, port, timeout, "https", transport
+    )
     result.update(probe)
     if probe["http_status"] is not None:
         result["is_redirect"] = probe["http_status"] in _REDIRECT_STATUSES
@@ -462,6 +492,7 @@ def audit_http_redirect(
     *,
     source_scheme: Literal["http", "https"] = "http",
     timeout: float = 5.0,
+    transport: AuthorizedTransport | None = None,
 ) -> HTTPRedirectAuditResult:
     """Classify redirect intent from one authorized origin's response head."""
     scheme = source_scheme if source_scheme in ("http", "https") else None
@@ -492,7 +523,7 @@ def audit_http_redirect(
     source_host = _canonical_host(identity)
     source["hostname"] = source_host
     probe, locations = _probe_response_head(
-        lookup_host, identity, port, timeout, scheme
+        lookup_host, identity, port, timeout, scheme, transport
     )
     result["probe"] = probe
     if probe["http_status"] is None:

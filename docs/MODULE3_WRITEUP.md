@@ -7,7 +7,7 @@ calculating weighted risk scores, evaluating security compliance
 and generating structured security reports.
 
 The module is designed to process HTTP findings from Member 1
-and validated TLS and HTTPS audit results from Member 2.
+and typed TLS and HTTPS auditor results from Member 2.
 
 ## 2. Module Objectives
 
@@ -95,187 +95,84 @@ and do not constitute formal regulatory certification.
 
 ## 6. Audit Coverage
 
-Audit coverage distinguishes usable audit evidence from
-incomplete or unsuccessful audit observations.
+Coverage is recorded as `COMPLETED` or `INCOMPLETE`. A timeout, client
+restriction, unprobed protocol, inconclusive result, or rejected input can
+leave coverage incomplete without establishing a vulnerability. Redirect
+coverage records the source response and first-hop outcome. A parsed
+destination remains `not_attempted` for verification.
 
-The supported coverage statuses are:
-
-- COMPLETED
-- INCOMPLETE
-
-Connection timeouts, client restrictions and inconclusive
-observations are not automatically classified as vulnerabilities.
-
-Completed coverage does not automatically establish compliance.
+The integration does not mark POL-009 as checked for a PASS. It can report a
+FAIL from a mapped finding. Otherwise POL-009 remains `NOT_CHECKED`, including
+for an HTTP-only report with a completed first-hop observation. A low risk
+score measures the findings observed and can coexist with incomplete coverage.
 
 ## 7. Duplicate Handling
 
-Duplicate findings are identified using their check ID and
-evidence.
-
-When matching findings contain different severity levels,
-the finding with the highest severity is retained.
-
-Certificate verification failures with matching endpoints
-and verification codes can be consolidated to avoid repeated
-risk scoring.
+General findings use the check ID and evidence as the duplicate key. The
+highest severity is retained when keys match. Certificate verification
+failures use the check ID and validated hostname/IP and port. Observations
+without an attributable endpoint remain separate. For a matching endpoint,
+known verification codes are retained once each in numeric order in the
+internal finding evidence. The risk score counts the finding once. JSON and
+HTML omit the internal evidence field.
 
 ## 8. Remediation Plan
 
-The remediation engine arranges recommendations from the
-highest to the lowest severity.
-
-Each recommendation includes:
-
-- Priority number
-- Security check ID
-- Severity
-- Finding title
-- Recommended action
-- Risk score
-
-Existing recommendations supplied by the auditors are reused.
+The engine builds recommendations from the mapped findings' remediation
+text. It deduplicates findings, orders them by severity weight, and records
+priority, check ID, severity, title, action, and risk score.
 
 ## 9. Report Generation
 
-### JSON Report
+The JSON report uses strict serialization (`allow_nan=False`) and document
+schema version 1. That document schema is separate from the Member 2 adapter
+envelope. The HTML report uses Jinja2 automatic escaping. Both display
+findings, severity, risk, policy status, coverage, and prioritised remediation.
+Both use local timestamped files in the ignored `reports/` directory.
 
-The JSON report provides structured audit information suitable
-for further processing and analysis.
+The writers omit finding evidence and references and redact recognised
+credential patterns in finding and remediation text. Pattern matching has
+limited coverage. Review reports before sharing.
 
-### HTML Report
+## 10. Integration Contract
 
-The HTML report provides a browser-based security dashboard
-containing:
+`integrate_audit_results(http_findings, tls_inputs, checked_http_policies,
+require_https_upgrade=False)` processes observations for one target. Member 1
+provides shared `Finding` objects. Member 2 provides typed auditor results as
+`(kind, result)` pairs. The integration boundary invokes
+`to_safe_audit_report` before mapping or scoring and rejects caller-supplied
+report envelopes. An adapter rejection creates an incomplete coverage entry
+without a finding or a raw-result fallback. Valid results from other
+operations remain usable.
 
-- Risk overview
-- Severity distribution
-- Compliance assessment
-- Security findings
-- Audit coverage
-- Prioritised remediation plan
+The CLI supplies authorised observations and adds the approved source origin
+and its coverage status. The function returns findings, risk and compliance
+summaries, coverage, and remediation for the two report writers. The shared
+finding key and report contract are single-target. Do not combine observations
+from unrelated targets in one call.
 
-Reports are generated locally inside the reports directory.
-The HTML report can be viewed offline using a web browser.
+## 11. Verification
 
-## 10. Security Controls
+Step 41D.1 passed 63 focused Member 3 tests. Step 42C.1 separately verified the
+HTTP-only CLI reporting contract with offline doubles. The historical Step
+44.1 baseline passed 900 tests (680 Member 2 and 220 remaining integration).
+Final Step 46C verification of `b47bca5b965ac80fd6a629489075e6638b009a42`
+passed **919 unique tests** across two non-overlapping guarded partitions
+(680 designated Member 2 and 239 remaining integration). Both exited 0
+with zero failures, skips, xfails, or xpasses. All 40 required Member 2
+loopback identities passed setup, call, and teardown. All 900 previous
+identities were preserved, with 19 additions.
 
-### Data Minimisation
+The live loopback CLI reconfirmed mandatory adaptation, first-hop reporting,
+and certificate failure deduplication. The HTTP audit left
+`POL-009=NOT_CHECKED`. With a temporary test-scoped CA, the trusted HTTPS
+audit verified TLS 1.2 and 1.3 and wrote partial JSON and HTML reports.
+Legacy protocols remained unprobed, so the intended exit code was 1 and
+`POL-009` remained `NOT_CHECKED`. The default-trust run wrote partial reports
+with one deduplicated certificate failure and `POL-009=FAIL`.
+[Final demonstration results](../README.md#local-demonstration)
 
-Unnecessary evidence and reference fields are excluded
-from the generated reports.
-
-### Sensitive Data Sanitisation
-
-Recognisable passwords, API keys, access tokens and Bearer
-tokens are redacted using pattern-based filtering.
-
-### HTML Injection Protection
-
-Jinja2 automatic HTML escaping is enabled to reduce the
-risk of malicious content executing in HTML reports.
-
-### Local Report Storage
-
-Generated reports are saved locally and are not automatically
-transmitted to external services.
-
-### Git Privacy Protection
-
-The reports directory is excluded using .gitignore to reduce
-the risk of accidental report uploads.
-
-## 11. Testing and Verification
-
-Testing was performed using:
-
-- Operating System: Windows
-- Python: 3.15.2
-- Pytest: 9.2.0
-- Ruff: Code quality verification
-
-### Automated Test Results
-
-| Testing Category | Passed |
-|---|---:|
-| Risk scoring | 3 |
-| Compliance evaluation | 3 |
-| TLS findings converter | 2 |
-| Audit coverage | 2 |
-| Remediation engine | 1 |
-| Audit integration | 2 |
-| JSON reporting | 1 |
-| HTML reporting | 1 |
-| Security protection | 3 |
-| Total | 18 |
-
-Total tests: 18
-Passed: 18
-Failed: 0
-Execution time: 0.55 seconds
-
-All scoped Python files passed Ruff verification.
-
-### Testing Commands
-
-python -m pytest tests/test_member3.py tests/test_member3_reporting.py -v
-
-python -m ruff check webguard/core webguard/reporting tests/test_member3.py tests/test_member3_reporting.py
-
-## 12. Team Integration
-
-The main integration function is:
-
-integrate_audit_results(
-    http_findings,
-    tls_reports,
-    checked_http_policies,
-    require_https_upgrade=False
-)
-
-HTTP findings must use the shared Finding model.
-
-TLS results must first be processed through Member 2's
-to_safe_audit_report() adapter.
-
-The integration function returns:
-
-- Combined unique findings
-- Risk summary
-- Compliance summary
-- Audit coverage
-- Remediation plan
-
-The processed result can then be supplied to:
-
-- generate_json_report()
-- generate_html_report()
-
-Member 4 is responsible for connecting the modules through
-the CLI and enforcing authorised target restrictions.
-
-## 13. Current Limitations
-
-- Automatic TLS compliance PASS evaluation remains pending.
-- Actual compatibility with the integrated auditors requires
-  further team testing.
-- Target authorisation and endpoint verification must be
-  enforced during final CLI integration.
-- Credential sanitisation cannot detect every possible
-  type of sensitive information.
-- Severity assignments and TLS policy requirements require
-  final team agreement.
-- Authorised target metadata is not yet included in reports.
-- Automated tests use simulated audit results and do not
-  establish complete end-to-end system security.
-
-## 14. Conclusion
-
-Module 3 provides the core compliance evaluation, weighted
-risk scoring, remediation prioritisation and reporting
-functions for WebGuard Audit.
-
-The implemented functions successfully passed all 18
-individual automated tests. Final team integration and
-end-to-end verification are required before the complete
-system is considered ready for release.
+```powershell
+python -B -m pytest --disable-plugin-autoload -p no:cacheprovider -o addopts= -q tests/test_member3.py tests/test_member3_reporting.py
+python -B -m ruff check --no-cache webguard/core webguard/reporting tests/test_member3.py tests/test_member3_reporting.py
+```

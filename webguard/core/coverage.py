@@ -1,5 +1,12 @@
 """Track TLS and HTTPS audit coverage."""
 
+from typing import get_args
+
+from webguard.auditors.report_adapter import HTTPOutcome, RedirectOutcome
+
+_REDIRECT_OUTCOMES = get_args(RedirectOutcome)
+_HTTP_OUTCOMES = get_args(HTTPOutcome)
+
 
 def evaluate_coverage(report: dict) -> dict:
     """Determine whether an audit produced usable evidence."""
@@ -8,7 +15,7 @@ def evaluate_coverage(report: dict) -> dict:
 
     kind = report["kind"]
     data = report["data"]
-    completed = False
+    redirect_coverage = {}
 
     if kind == "tls_connectivity":
         completed = data["status"] in {
@@ -40,10 +47,38 @@ def evaluate_coverage(report: dict) -> dict:
         }
 
     elif kind == "http_redirect":
-        completed = (
-            data["probe"]["outcome"] == "available"
-            and data["redirect"]["outcome"] != "not_evaluated"
+        probe = data["probe"]
+        redirect = data["redirect"]
+        outcome = redirect["outcome"]
+        probe_outcome = probe["outcome"]
+        destination = redirect["destination"]
+        verification = (
+            "not_attempted"
+            if destination is not None
+            and destination["verification"] == "not_attempted"
+            else None
         )
+        completed = (
+            probe_outcome == "available"
+            and probe["http_status"] is not None
+            and (
+                outcome == "no_redirect"
+                or (
+                    outcome in ("upgrade", "downgrade", "same_scheme_redirect")
+                    and destination is not None
+                    and verification is not None
+                    and all(
+                        destination[field] is not None
+                        for field in ("scheme", "hostname", "port")
+                    )
+                )
+            )
+        )
+        redirect_coverage = {
+            "redirect_outcome": outcome if outcome in _REDIRECT_OUTCOMES else None,
+            "probe_outcome": probe_outcome if probe_outcome in _HTTP_OUTCOMES else None,
+            "destination_verification": verification,
+        }
 
     else:
         raise ValueError("Unsupported TLS audit kind")
@@ -57,4 +92,5 @@ def evaluate_coverage(report: dict) -> dict:
             else "INCOMPLETE"
         ),
         "data_quality_issues": len(issues),
+        **redirect_coverage,
     }

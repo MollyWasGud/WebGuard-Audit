@@ -2,40 +2,116 @@
 """Command-line interface for WebGuard Audit."""
 
 import argparse
+from time import monotonic
+from urllib.parse import urlsplit
 
 from webguard import __version__
+from webguard.auditors import https, tls
 from webguard.auditors.http_audit import audit as audit_http
+from webguard.auditors.report_adapter import AuditKind, RawAuditResult
 from webguard.core.audit_integration import integrate_audit_results
 from webguard.reporting.html_report import generate_html_report
 from webguard.reporting.json_report import generate_json_report
 from webguard.security.authorization import confirm_authorization
-from webguard.security.fetcher import FetchRefused, fetch
-from webguard.security.scope_validator import validate_target
+from webguard.security.dialer import AuthorizedTransport, UnauthorizedDial
+from webguard.security.fetcher import fetch
+from webguard.security.scope_validator import approved_origin
 
 # Policies that Module 1 (HTTP auditor) evaluates. POL-009 (TLS/HTTPS) belongs to Module 2.
 HTTP_POLICIES = {"POL-002", "POL-003", "POL-004", "POL-005", "POL-006", "POL-007", "POL-008"}
 
 
-def run_audit(target: str) -> int:
-    """Fetch the (already scope-checked) target once, audit it, score it and write local reports."""
+_AUDIT_BUDGET = 20.0
 
-    print("[*] Fetching the target once (direct connection, no proxy, no redirects)...")
-    try:
-        response = fetch(target)
-    except (FetchRefused, OSError) as exc:
-        print(f"[-] Could not audit the target: {exc}")
+
+def _operation_plan(scheme: str) -> list[tuple[str, str]]:
+    if scheme == "http":
+        return [
+            ("http_headers", "HTTP security header analysis"),
+            ("http_redirect", "First-hop HTTP redirect assessment"),
+        ]
+    return [
+        ("tls_certificate", "Certificate and verified TLS connectivity"),
+        ("tls_protocols", "Modern TLS protocol assessment"),
+        ("http_redirect", "HTTPS availability and first-hop redirect assessment"),
+    ]
+
+
+def run_audit(target: str) -> int:
+    """Execute the plan for one approved source and write local reports."""
+    origin = approved_origin(target)
+    if origin is None:
+        print("[-] Target is invalid or outside the approved scope.")
         return 1
 
-    http_findings = audit_http(response)
+    parsed = urlsplit(origin)
+    host, port = parsed.hostname, parsed.port
+    if host is None or port is None:
+        print("[-] Target has no explicit endpoint.")
+        return 1
+    transport = AuthorizedTransport(
+        parsed.scheme, host, port, host, deadline=monotonic() + _AUDIT_BUDGET
+    )
+    tls_inputs: list[tuple[AuditKind, RawAuditResult]] = []
+    unavailable = []
+    http_findings = []
+    checked = set()
 
-    # HSTS only means something over HTTPS. Over plain HTTP it stays NOT_CHECKED instead of a false PASS.
-    checked = set(HTTP_POLICIES)
-    if response.is_https:
-        checked.add("POL-001")
+    for kind, label in _operation_plan(parsed.scheme):
+        print(f"[*] {label}")
+        try:
+            transport.checkpoint(_AUDIT_BUDGET)
+            if kind == "http_headers":
+                response = fetch(target, transport=transport)
+            elif kind == "tls_certificate":
+                tls_inputs.append(
+                    (kind, tls.audit_tls_certificate(host, port, transport=transport))
+                )
+            elif kind == "tls_protocols":
+                tls_inputs.append(
+                    (kind, tls.audit_tls_protocols(host, port, transport=transport))
+                )
+            else:
+                tls_inputs.append(
+                    (
+                        "http_redirect",
+                        https.audit_http_redirect(
+                            host, port, source_scheme=parsed.scheme, transport=transport
+                        ),
+                    )
+                )
+        except UnauthorizedDial:
+            unavailable.append(f"{label} (unauthorized)")
+        except TimeoutError:
+            unavailable.append(f"{label} (deadline or operation timeout)")
+        except OSError:
+            unavailable.append(f"{label} (failed or refused)")
+        else:
+            if kind == "http_headers":
+                http_findings = audit_http(response)
+                checked = set(HTTP_POLICIES)
+            continue
+        print(f"[-] Could not audit the target: {unavailable[-1]}.")
 
-    # TLS reports come from Module 2. A plain-HTTP target has no TLS to inspect, so the list is empty
-    # and TLS/HTTPS coverage is reported as not checked.
-    result = integrate_audit_results(http_findings, [], checked)
+    result = integrate_audit_results(http_findings, tls_inputs, checked)
+    for label in unavailable:
+        result["audit_coverage"].append(
+            {
+                "audit_kind": label,
+                "coverage_status": "INCOMPLETE",
+                "data_quality_issues": 0,
+            }
+        )
+    partial = any(
+        row["coverage_status"] == "INCOMPLETE" for row in result["audit_coverage"]
+    )
+    result["audit_coverage"].append(
+        {
+            "audit_kind": f"Audit scope: {origin}",
+            "coverage_status": "INCOMPLETE" if partial else "COMPLETED",
+            "data_quality_issues": 0,
+        }
+    )
 
     risk = result["risk_summary"]
     compliance = result["compliance_summary"]
@@ -50,8 +126,13 @@ def run_audit(target: str) -> int:
 
     print(f"[+] JSON report: {generate_json_report(result)}")
     print(f"[+] HTML report: {generate_html_report(result)}")
-    print("[*] Reports were saved locally. Nothing was sent anywhere.")
-    return 0
+    if partial:
+        print(
+            "[!] Partial audit reports saved locally. Some operations were incomplete."
+        )
+    else:
+        print("[*] Audit reports saved locally.")
+    return int(partial)
 
 
 def main():
@@ -95,25 +176,25 @@ def execute_cli():
     print("==========================")
 
     # Validate target scope.
-    if not validate_target(args.target):
+    origin = approved_origin(args.target)
+    if origin is None:
         print("[-] Target is invalid or outside the approved scope.")
         return 1
 
     print("[+] Target is within the approved scope.")
 
     # Confirm authorization.
-    if not confirm_authorization(args.target):
+    if not confirm_authorization(origin):
         return 1
 
     # Handle dry-run mode.
     if args.dry_run:
         print("\n=== DRY-RUN MODE ===")
-        print(f"Target: {args.target}")
+        print(f"Target: {origin}")
         print("Planned audit activities:")
-        print("1. HTTP security header analysis")
-        print("2. TLS and HTTPS analysis")
-        print("3. Risk and compliance evaluation")
-        print("4. Report generation")
+        for index, (_, label) in enumerate(_operation_plan(urlsplit(origin).scheme), 1):
+            print(f"{index}. {label}")
+        print("Then score the available findings and write local reports.")
         print("\nNo network requests were performed.")
         return 0
 

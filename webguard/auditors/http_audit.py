@@ -21,13 +21,14 @@ TOKEN_RE = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")            # RFC 6265 coo
 SESSIONISH = re.compile(r"sess|sid|auth|token|jwt|login", re.I)    # cookies that hold a login
 IPV4_CANDIDATE = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
 PRIVATE_NETWORKS = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+INTERNAL_IP_HEADER_LABELS = {"x-backend": "X-Backend", "x-backend-server": "X-Backend-Server"}
 PRODUCT_VERSION = re.compile(r"[A-Za-z][A-Za-z0-9_.\-]*/[0-9][A-Za-z0-9_.\-]*")   # only used to DETECT the shape
 VERSION_RE = re.compile(r"[0-9]{1,3}(?:\.[0-9]{1,3}){0,3}")
-# Disclosure evidence is built ONLY from this allowlist; any other value is never shown (it could be a secret).
+# Version-shaped values can contain secrets even when the product name is recognized.
 KNOWN_PRODUCTS = {"apache", "nginx", "php", "express", "microsoft-iis", "iis", "tomcat", "jetty", "openssl", "python",
                   "basehttp", "werkzeug", "gunicorn", "lighttpd", "caddy", "litespeed", "asp.net", "node.js"}
-HSTS_MAX_DIGITS = 12   # longer numbers are treated as malformed (browsers cap the value anyway)
-HSTS_DIRECTIVE = re.compile(r"[A-Za-z0-9_\-]+(?:=[^;\s]*)?")
+HSTS_MAX_DIGITS = 12  # Local validation limit.
+HSTS_DIRECTIVE = re.compile(r'[A-Za-z0-9_-]+(?:=(?:[^;\s"]+|"[^";\s]*"))?')
 REFERRER_VALID = {"no-referrer", "no-referrer-when-downgrade", "origin", "origin-when-cross-origin",
                   "same-origin", "strict-origin", "strict-origin-when-cross-origin", "unsafe-url"}
 HSTS_MIN_SECONDS = 15_552_000  # 180 days
@@ -113,22 +114,70 @@ def check_csp(resp: ResponseData) -> list[Finding]:
         return [_f("CSP:missing", "csp", "MEDIUM", "Content-Security-Policy missing",
                    "No browser-side defence against XSS.", "Add a CSP such as default-src 'self'")]
     out = []
-    if all(_effective(p, SCRIPT_CHAINS[0]) is None for p in policies):   # no script-src-elem, script-src or default-src
-        out.append(_f("CSP:no-script-restriction", "csp", "MEDIUM", "CSP does not restrict scripts",
-                      "No script-src, script-src-elem or default-src, so any script may run.",
-                      "Add script-src 'self' or default-src 'self'"))
-    script_checks = (
-        ("CSP:unsafe-inline", "MEDIUM", "CSP allows 'unsafe-inline' scripts", _script_inline_allowed, "'unsafe-inline'",
-         "Use nonces or hashes instead of 'unsafe-inline'"),
-        ("CSP:unsafe-eval", "MEDIUM", "CSP allows 'unsafe-eval' scripts", lambda t: "'unsafe-eval'" in t, "'unsafe-eval'",
-         "Remove 'unsafe-eval' and avoid eval()"),
-        ("CSP:wildcard", "MEDIUM", "CSP script sources are too broad",
-         lambda t: any(x in ("*", "http:", "https:", "data:") for x in t), "wildcard or scheme-only source",
-         "List the exact trusted script origins"),
-    )
-    for check_id, sev, title, test, evidence, fix in script_checks:
-        if _weak_any_chain(policies, SCRIPT_CHAINS, test):
-            out.append(_f(check_id, "csp", sev, title, "Weakens protection against XSS.", fix, evidence))
+    script_elements, script_attributes = SCRIPT_CHAINS
+    if all(_effective(p, script_elements) is None for p in policies):
+        out.append(
+            _f(
+                "CSP:no-script-restriction",
+                "csp",
+                "MEDIUM",
+                "CSP does not restrict script elements",
+                "No script-src-elem, script-src or default-src applies to script elements.",
+                "Add script-src 'self' or default-src 'self'",
+            )
+        )
+
+    inline_contexts = [
+        name
+        for chain, name in (
+            (script_elements, "script elements"),
+            (script_attributes, "event-handler attributes"),
+        )
+        if _weak_in_all(policies, chain, _script_inline_allowed)
+    ]
+    if inline_contexts:
+        context = " and ".join(inline_contexts)
+        out.append(
+            _f(
+                "CSP:unsafe-inline",
+                "csp",
+                "MEDIUM",
+                f"CSP allows inline {context}",
+                "Weakens protection against XSS.",
+                "Use nonces or hashes for script elements and replace inline event handlers",
+                "'unsafe-inline'",
+            )
+        )
+    if _weak_in_all(
+        policies, ("script-src", "default-src"), lambda t: "'unsafe-eval'" in t
+    ):
+        out.append(
+            _f(
+                "CSP:unsafe-eval",
+                "csp",
+                "MEDIUM",
+                "CSP allows JavaScript string evaluation",
+                "Weakens protection against XSS.",
+                "Remove 'unsafe-eval' and avoid eval()",
+                "'unsafe-eval'",
+            )
+        )
+    if _weak_in_all(
+        policies,
+        script_elements,
+        lambda t: any(x in ("*", "http:", "https:", "data:") for x in t),
+    ):
+        out.append(
+            _f(
+                "CSP:wildcard",
+                "csp",
+                "MEDIUM",
+                "CSP sources for script elements are too broad",
+                "Broad sources for script elements weaken protection against XSS.",
+                "List the exact trusted script sources",
+                "wildcard or scheme-only source",
+            )
+        )
     if _weak_any_chain(policies, STYLE_CHAINS, _style_inline_allowed):
         out.append(_f("CSP:style-unsafe-inline", "csp", "LOW", "CSP allows 'unsafe-inline' styles",
                       "Inline styles can be abused for data leaks; lower risk than scripts.", "Use nonces or hashes for styles",
@@ -143,8 +192,7 @@ def check_csp(resp: ResponseData) -> list[Finding]:
 def _hsts_max_age(value: str) -> int | None:
     """Valid max-age in seconds, or None if the header is malformed. Never raises.
 
-    Invalid: a directive with bad syntax, a repeated directive (RFC 6797: browsers ignore the header),
-    a missing max-age, or a max-age that is not plain ASCII digits (or is absurdly long).
+    Reject malformed or repeated directives and max-age values outside the local ASCII digit limit.
     """
     seen, max_age = set(), None
     for raw in value.split(";"):
@@ -159,8 +207,9 @@ def _hsts_max_age(value: str) -> int | None:
             return None
         seen.add(name)
         if name == "max-age":
-            val = val.strip('"')
-            if not re.fullmatch(r"[0-9]{1,%d}" % HSTS_MAX_DIGITS, val):
+            if val.startswith('"'):
+                val = val[1:-1]
+            if not re.fullmatch(rf"[0-9]{{1,{HSTS_MAX_DIGITS}}}", val):
                 return None
             max_age = int(val)
     return max_age
@@ -177,8 +226,16 @@ def check_headers(resp: ResponseData) -> list[Finding]:
             out.append(_f("HDR:hsts", "headers", "MEDIUM", "HSTS missing", "Browsers may still use plain HTTP.",
                           "Add Strict-Transport-Security: max-age=31536000; includeSubDomains"))
         elif age is None:
-            out.append(_f("HDR:hsts-invalid", "headers", "MEDIUM", "HSTS max-age missing or invalid",
-                          "Browsers ignore an HSTS header without a valid max-age.", "Use max-age=31536000"))
+            out.append(
+                _f(
+                    "HDR:hsts-invalid",
+                    "headers",
+                    "MEDIUM",
+                    "HSTS header is malformed or unsupported",
+                    f"This auditor requires valid, non-duplicate directives and a max-age of up to {HSTS_MAX_DIGITS} ASCII digits.",
+                    "Use max-age=31536000",
+                )
+            )
         elif age == 0:
             out.append(_f("HDR:hsts-disabled", "headers", "MEDIUM", "HSTS is disabled (max-age=0)",
                           "max-age=0 tells browsers to forget HSTS.", "Use max-age=31536000", "max-age=0"))
@@ -217,10 +274,27 @@ def check_headers(resp: ResponseData) -> list[Finding]:
             out.append(_f("HDR:referrer-invalid", "headers", "LOW", "Referrer-Policy value is invalid",
                           "Browsers ignore unknown values, so the default applies.",
                           "Use Referrer-Policy: strict-origin-when-cross-origin"))
-        elif valid[-1] in ("unsafe-url", "no-referrer-when-downgrade"):  # the last valid value is the one browsers use
-            out.append(_f("HDR:referrer-weak", "headers", "LOW", "Referrer-Policy leaks full URLs",
-                          "Full URLs (with paths and queries) are sent to other sites.",
-                          "Use strict-origin-when-cross-origin or no-referrer", valid[-1]))
+        elif valid[-1] in (
+            "unsafe-url",
+            "no-referrer-when-downgrade",
+        ):  # the last valid value is the one browsers use
+            detail = "Cross-origin requests can include the referrer URL with its path and query."
+            if valid[-1] == "no-referrer-when-downgrade":
+                detail = (
+                    "Requests at the same security level or to a more secure destination can include "
+                    "the referrer URL with its path and query. The policy omits it on HTTPS-to-HTTP downgrades."
+                )
+            out.append(
+                _f(
+                    "HDR:referrer-weak",
+                    "headers",
+                    "LOW",
+                    "Referrer-Policy can expose full URLs",
+                    detail,
+                    "Use strict-origin-when-cross-origin or no-referrer",
+                    valid[-1],
+                )
+            )
 
     origin = (resp.get("Access-Control-Allow-Origin") or "").strip()
     credentials = (resp.get("Access-Control-Allow-Credentials") or "").strip().lower() == "true"
@@ -253,13 +327,15 @@ def _is_private_ipv4(text: str) -> bool:
 
 
 def _safe_products(value: str) -> str:
-    """'Apache/2.4.1 token=SECRET' -> 'Apache/2.4.1'. Only allowlisted products with a numeric version survive."""
-    kept = []
-    for match in PRODUCT_VERSION.findall(value):
-        product, _, version = match.partition("/")
-        if product.lower() in KNOWN_PRODUCTS and VERSION_RE.fullmatch(version):
-            kept.append(f"{product}/{version}")
-    return " ".join(kept[:3])
+    """Summarize recognized products without copying their version strings."""
+    kept = {}
+    for match in PRODUCT_VERSION.finditer(value):
+        product, _, version = match.group().lower().partition("/")
+        if product in KNOWN_PRODUCTS and VERSION_RE.fullmatch(version):
+            kept[product] = None
+            if len(kept) == 3:
+                break
+    return " ".join(kept)
 
 
 def check_disclosure(resp: ResponseData) -> list[Finding]:
@@ -276,8 +352,19 @@ def check_disclosure(resp: ResponseData) -> list[Finding]:
                           f"Remove or hide the {name} header", f"{name}: {safe}" if safe else name))
     for key, value in resp.headers:
         if key.lower() != "set-cookie" and _is_private_ipv4(value):
-            out.append(_f("DISC:internal-ip", "disclosure", "MEDIUM", "Internal IP address in a response header",
-                          "Reveals the private network layout.", "Remove the internal address from the header", key))
+            out.append(
+                _f(
+                    "DISC:internal-ip",
+                    "disclosure",
+                    "MEDIUM",
+                    "Internal IP address in a response header",
+                    "Reveals the private network layout.",
+                    "Remove the internal address from the header",
+                    INTERNAL_IP_HEADER_LABELS.get(
+                        key.lower(), "Private IPv4 address detected"
+                    ),
+                )
+            )
     return out
 
 

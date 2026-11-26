@@ -1,6 +1,8 @@
 
 """Automated tests for authorization safeguards."""
 
+import pytest
+
 from webguard.security.authorization import confirm_authorization
 
 
@@ -34,4 +36,5 @@ def test_authorization_interrupted(monkeypatch):
 
     monkeypatch.setattr("builtins.input", interrupt)
 
-    assert confirm_authorization("http://127.0.0.1:8000") is False
+    with pytest.raises(KeyboardInterrupt):
+        confirm_authorization("http://127.0.0.1:8000")

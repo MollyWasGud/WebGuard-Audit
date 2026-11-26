@@ -12,7 +12,7 @@ def confirm_authorization(target: str) -> bool:
             "Do you have authorization? (yes/no): "
         ).strip().lower()
 
-    except (KeyboardInterrupt, EOFError):
+    except EOFError:
         print("\nAuthorization cancelled.")
         return False
 

@@ -13,6 +13,8 @@ from types import TracebackType
 from typing import Literal, TypedDict, TypeVar
 from unicodedata import category
 
+from webguard.security.dialer import AuthorizedTransport
+
 _DNS_LABEL = re.compile(
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", re.IGNORECASE | re.ASCII
 )
@@ -183,13 +185,17 @@ def _validate_endpoint(hostname: str, port: int, timeout: float) -> tuple[str, s
 
 
 def audit_tls_connectivity(
-    hostname: str, port: int = 443, *, timeout: float = 5.0
+    hostname: str,
+    port: int = 443,
+    *,
+    timeout: float = 5.0,
+    transport: AuthorizedTransport | None = None,
 ) -> TLSConnectivityResult:
     """Report a verified TLS connection's settings or failure.
 
     IPv6 scope identifiers are unsupported.
     """
-    return _audit_tls(hostname, port, timeout)
+    return _audit_tls(hostname, port, timeout, transport=transport)
 
 
 def _create_verified_client_context() -> ssl.SSLContext:
@@ -232,6 +238,7 @@ def _audit_tls(
     *,
     context: ssl.SSLContext | None = None,
     evidence: _TLSHandshakeEvidence | None = None,
+    transport: AuthorizedTransport | None = None,
 ) -> TLSConnectivityResult:
     result: TLSConnectivityResult = {
         "hostname": hostname,
@@ -266,13 +273,20 @@ def _audit_tls(
 
     with ExitStack() as sockets:
         try:
+            peer = (
+                socket.create_connection((lookup_host, port), timeout=timeout)
+                if transport is None
+                else transport.connect("https", tls_identity, port, timeout)
+            )
             tcp_socket = _enter_socket(
                 sockets,
-                socket.create_connection((lookup_host, port), timeout=timeout),
+                peer,
                 diagnostics,
                 "tcp_close_failed",
             )
             stage = "handshake"
+            if transport is not None:
+                transport.checkpoint(timeout)
             tls_socket = _enter_socket(
                 sockets,
                 context.wrap_socket(
@@ -283,7 +297,9 @@ def _audit_tls(
                 diagnostics,
                 "tls_close_failed",
             )
-            tls_socket.settimeout(timeout)
+            tls_socket.settimeout(
+                timeout if transport is None else transport.checkpoint(timeout)
+            )
             tls_socket.do_handshake()
         except ssl.SSLCertVerificationError as error:
             result["status"] = "certificate_verification_failed"
@@ -388,7 +404,12 @@ def _certificate_metadata(der: bytes, warning_days: int) -> TLSCertificateMetada
 
 
 def audit_tls_certificate(
-    hostname: str, port: int = 443, *, timeout: float = 5.0, warning_days: int = 30
+    hostname: str,
+    port: int = 443,
+    *,
+    timeout: float = 5.0,
+    warning_days: int = 30,
+    transport: AuthorizedTransport | None = None,
 ) -> TLSCertificateAuditResult:
     """Collect leaf metadata only after the peer passes certificate and identity checks."""
     result: TLSCertificateAuditResult = {
@@ -415,7 +436,7 @@ def audit_tls_certificate(
         except (OSError, ValueError):
             result["certificate_error"] = "Unable to read verified certificate DER"
 
-    connectivity = _audit_tls(hostname, port, timeout, capture)
+    connectivity = _audit_tls(hostname, port, timeout, capture, transport=transport)
     result["connectivity"] = connectivity
     if connectivity["status"] != "ok":
         return result
@@ -480,6 +501,8 @@ def _probe_tls_version(
     version: ssl.TLSVersion,
     build_flag: str,
     disable_flag: int,
+    *,
+    transport: AuthorizedTransport | None = None,
 ) -> TLSProtocolProbe:
     probe: TLSProtocolProbe = {
         "requested_version": name,
@@ -523,7 +546,9 @@ def _probe_tls_version(
         return probe
 
     evidence: _TLSHandshakeEvidence = {}
-    connection = _audit_tls(hostname, port, timeout, context=context, evidence=evidence)
+    connection = _audit_tls(
+        hostname, port, timeout, context=context, evidence=evidence, transport=transport
+    )
     reason = evidence.get("ssl_reason")
     probe.update(
         outcome="inconclusive",
@@ -559,7 +584,12 @@ def _probe_tls_version(
 
 
 def audit_tls_protocols(
-    hostname: str, port: int = 443, *, timeout: float = 5.0, probe_legacy: bool = False
+    hostname: str,
+    port: int = 443,
+    *,
+    timeout: float = 5.0,
+    probe_legacy: bool = False,
+    transport: AuthorizedTransport | None = None,
 ) -> TLSProtocolAuditResult:
     """Probe exact versions under the client policy and report one cipher per handshake."""
     result: TLSProtocolAuditResult = {
@@ -589,7 +619,11 @@ def audit_tls_protocols(
         result["not_probed"] = [name for name, *_ in _LEGACY_PROTOCOLS]
 
     for version in versions:
-        result["probes"].append(_probe_tls_version(hostname, port, timeout, *version))
+        if transport is not None:
+            transport.checkpoint(timeout)
+        result["probes"].append(
+            _probe_tls_version(hostname, port, timeout, *version, transport=transport)
+        )
 
     tls12, tls13, *legacy = result["probes"]
     if any(probe["outcome"] == "confirmed_supported" for probe in legacy):
