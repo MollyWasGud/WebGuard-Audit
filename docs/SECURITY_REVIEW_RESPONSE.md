@@ -37,6 +37,31 @@ Real-loopback cases (fetcher tests and the demo server test) pass. Standalone de
 Step 43A verified M1-02 through M1-05 with 20 focused regressions and passed
 95 tests in the offline Member 1 partition. M1-01 remained resolved. The
 integrated loopback HTTP demo returned GET 200 and HEAD 501, produced 14
-findings, and left TLS policy `NOT_CHECKED`. The controlled 302 recorded its
-first hop without contacting the destination. The final guarded partitions
-passed 900 unique tests.
+findings, and left TLS policy `NOT_CHECKED`. The controlled 302 wrote partial
+reports and exited 1. It recorded its first hop with
+`verification=not_attempted` and left the destination unresolved and
+uncontacted. The trusted HTTPS audit used a temporary test-scoped CA,
+verified TLS 1.2 and 1.3, and returned the intended exit 1 because legacy
+versions remained unprobed. Default trust rejected the certificate,
+produced one deduplicated finding, and returned exit 1. See the
+[final demonstration results](../README.md#local-demonstration).
+
+The historical Step 44.1 baseline passed 900 unique tests (680 Member 2 and
+220 remaining integration). Final Step 46C verification of
+`b47bca5b965ac80fd6a629489075e6638b009a42` passed **919 unique tests** across
+two non-overlapping guarded partitions (680 designated Member 2 and 239
+remaining integration). Both exited 0 with zero failures, skips, xfails,
+or xpasses. All 40 required Member 2 loopback identities passed setup, call,
+and teardown. All 900 previous test identities were preserved, with 19
+additions. Verification covered approved loopback endpoints under a
+Python-level network guard.
+
+## PR #6 analysis follow-up
+
+SonarQube Cloud resolved both `pythonsecurity:S8703` findings and the
+`python:S8495` finding as **Fixed**. The final verified source commit passed
+the Quality Gate, with A for Security and A for Reliability on New Code.
+Ten maintainability-only issues and two deferred analysis warnings remain,
+with zero security hotspots on New Code. The five historical Low security
+findings remain documented in the [historical review](../README.md#historical-sonarqube-review).
+Automatic Analysis runs without imported coverage data.

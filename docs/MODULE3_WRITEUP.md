@@ -154,11 +154,23 @@ from unrelated targets in one call.
 ## 11. Verification
 
 Step 41D.1 passed 63 focused Member 3 tests. Step 42C.1 separately verified the
-HTTP-only CLI reporting contract with offline doubles. The final guarded
-integrated runs passed 680 Member 2 and 220 remaining integration tests,
-with all 40 required loopback cases passing. The live CLI verified mandatory
-adaptation, first-hop reporting, partial HTTPS coverage, and deduplication
-of certificate verification failures.
+HTTP-only CLI reporting contract with offline doubles. The historical Step
+44.1 baseline passed 900 tests (680 Member 2 and 220 remaining integration).
+Final Step 46C verification of `b47bca5b965ac80fd6a629489075e6638b009a42`
+passed **919 unique tests** across two non-overlapping guarded partitions
+(680 designated Member 2 and 239 remaining integration). Both exited 0
+with zero failures, skips, xfails, or xpasses. All 40 required Member 2
+loopback identities passed setup, call, and teardown. All 900 previous
+identities were preserved, with 19 additions.
+
+The live loopback CLI reconfirmed mandatory adaptation, first-hop reporting,
+and certificate failure deduplication. The HTTP audit left
+`POL-009=NOT_CHECKED`. With a temporary test-scoped CA, the trusted HTTPS
+audit verified TLS 1.2 and 1.3 and wrote partial JSON and HTML reports.
+Legacy protocols remained unprobed, so the intended exit code was 1 and
+`POL-009` remained `NOT_CHECKED`. The default-trust run wrote partial reports
+with one deduplicated certificate failure and `POL-009=FAIL`.
+[Final demonstration results](../README.md#local-demonstration)
 
 ```powershell
 python -B -m pytest --disable-plugin-autoload -p no:cacheprovider -o addopts= -q tests/test_member3.py tests/test_member3_reporting.py

@@ -197,7 +197,7 @@ Run from the repository root using the designated Windows environment.
 .\.venv\Scripts\python.exe -B tests\verify_member2.py
 ```
 
-The runner checks exact required pytest node IDs and requires passing setup, call, and teardown reports. Missing, skipped, failed, incomplete, or expected-failure results invalidate required coverage. It uses the default pytest prepend import mode, disables automatic plugin loading, and requires `PYTEST_ADDOPTS` and `PYTEST_PLUGINS` to be unset or empty. The Windows profile resolves test `localhost` to `127.0.0.1` and guards observed socket operations. It assumes trusted local Python, dependencies, startup hooks, and repository configuration. The built-in guard is scoped to the parent. For Step 44, use the corrected launcher to handle local reverse lookups without DNS and confine the existing verification children too. A Python audit hook provides no general sandbox. [Verification runner](../tests/verify_member2.py)
+The runner checks exact required pytest node IDs and requires passing setup, call, and teardown reports. Missing, skipped, failed, incomplete, or expected-failure results invalidate required coverage. It uses the default pytest prepend import mode, disables automatic plugin loading, and requires `PYTEST_ADDOPTS` and `PYTEST_PLUGINS` to be unset or empty. The Windows profile resolves test `localhost` to `127.0.0.1` and guards observed socket operations. It assumes trusted local Python, dependencies, startup hooks, and repository configuration. The built-in guard is scoped to the parent. The corrected launcher used in Steps 44.1 and 46C handles local reverse lookups without DNS and confines audited children as well. This is a Python-level network guard. OS-level isolation is outside its scope. [Verification runner](../tests/verify_member2.py)
 
 ## Security controls and limits
 
@@ -250,15 +250,23 @@ loaded in the test context and a leaf with an IP SAN for `127.0.0.1`.
 
 ## Presentation summary
 
-The original standalone Windows run passed 678 tests. The final integrated
-baseline passed 900 unique tests across two guarded partitions (680 Member 2
-and 220 remaining integration), including all 40 required loopback cases.
+The original standalone Windows run passed 678 tests. The historical Step
+44.1 baseline passed 900 unique tests (680 Member 2 and 220 remaining
+integration). Final Step 46C verification of
+`b47bca5b965ac80fd6a629489075e6638b009a42` passed **919 unique tests** across
+two non-overlapping guarded partitions (680 designated Member 2 and 239
+remaining integration). Both exited 0 with zero failures, skips, xfails, or
+xpasses. All 40 required loopback identities passed setup, call, and teardown.
+All 900 previous identities were preserved, with 19 additions.
 
-Steps 44 and 44.1 verified P1-05, P1-06, P1-12, and P6-03 within approved
-loopback scope. The HTTP GET and HEAD reached the authorized peer. The
-controlled redirect recorded intent without dialing its destination. With
-a temporary test-scoped CA, the HTTPS fixture verified TLS 1.2 and 1.3.
-Legacy versions remained unprobed, so HTTPS coverage was partial. Under
-default trust, the fixture produced one deduplicated certificate failure.
-The proposed cryptography minimum and reporting schema version 1 remain
-team decisions.
+Within the approved loopback scope, the final demonstrations reconfirmed
+P1-05, P1-06, P1-12, and P6-03. The HTTP GET and HEAD reached the authorized
+peer. The controlled 302 retained first-hop evidence without resolving or
+dialing the destination. A temporary test-scoped CA enabled verified TLS 1.2
+and 1.3 and a successful HTTPS HEAD. Legacy versions remained unprobed, so
+the trusted audit wrote partial reports and returned the intended exit 1.
+With default trust, certificate verification stopped the HTTP request and
+produced one deduplicated finding with verification code 20. See the
+[final demonstration results](../README.md#local-demonstration) for exit
+codes and policy outcomes. The proposed cryptography minimum and reporting
+schema version 1 remain team decisions.
