@@ -27,9 +27,11 @@ class FetchRefused(PermissionError):
 def _check_target(url: str) -> tuple[str, int, str]:
     try:
         parts = urlsplit(url)
-        port = parts.port or 80
+        port = 80 if parts.port is None else parts.port   # an explicit port 0 must NOT silently become 80
     except ValueError:
         raise FetchRefused("Demo fetcher refused: malformed URL.") from None
+    if port == 0:
+        raise FetchRefused("Demo fetcher refused: port 0 is not a valid target.")
     if parts.scheme != "http":
         raise FetchRefused("Demo fetcher refused: only plain http to loopback is allowed.")
     if parts.username is not None or parts.password is not None:
