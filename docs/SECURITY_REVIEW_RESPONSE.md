@@ -16,3 +16,18 @@ Branch: `feature/http-auditor` (PR #1). All 11 original tests are unchanged and 
 ## Not changed (contract kept)
 `Finding` and `ResponseData` are unchanged apart from hiding raw headers/body in `repr()`.
 Target-qualified deduplication, severity policy and separating "audit incomplete" from vulnerabilities belong to the shared integration layer (Members 2, 3 and 4).
+
+---
+
+# Follow-up review (commit 2ded10a)
+
+| ID | Status | What changed | Tests (`tests/test_followup_review.py`) |
+|----|--------|--------------|------------------------------------------|
+| M1-02 | Fixed | Disclosure evidence is built only from an allowlist of known products with a strictly numeric version; anything else shows just the header name. `repr(ResponseData)` shows only `scheme://host:port` (no path, query token, user:password or fragment). | `test_disclosure_evidence_is_allowlisted`, `test_repr_does_not_expose_url_tokens` |
+| M1-03 | Fixed | HSTS is validated by directive syntax: a repeated directive (for example two `max-age`), bad syntax, a non-ASCII-digit or oversized value is classified as `HDR:hsts-invalid`. No `ValueError` can escape. | `test_malformed_hsts_is_invalid_and_never_raises` (12 cases), `test_valid_hsts_forms_are_accepted`, `test_audit_survives_garbage_headers` |
+| M1-01 | Fixed | An explicit port 0 is refused instead of becoming port 80. Loopback confinement, proxy isolation and redirect rejection are unchanged. | `test_port_zero_is_refused_not_defaulted_to_80`, `test_default_port_is_still_80_and_loopback_rules_stay` |
+| M1-04 | Fixed | `'strict-dynamic'` only affects scripts, never style findings. CSP3 fallback chains are used: `script-src-elem` / `script-src-attr` (and the style equivalents) fall back to `script-src`, then `default-src`. | `test_strict_dynamic_does_not_suppress_style_findings`, `test_script_src_elem_*`, `test_script_elem_and_attr_directives_are_analysed` |
+| M1-05 | Fixed | All `Referrer-Policy` header fields are combined; the last valid token wins. Private-IP findings require a real RFC 1918 address (checked with `ipaddress`), so `999.1.1.1`, `010.0.0.1` and `10.0.0.1.2` give no finding. | `test_multiple_referrer_policy_header_fields`, `test_not_a_real_private_ip_gives_no_finding`, `test_real_private_ip_gives_finding_*` |
+
+Results: `python -m pytest -q` -> **79 passed** (43 existing, all preserved, plus 36 new). 19 of the new test cases fail on the previous version.
+Real-loopback cases (fetcher tests and the demo server test) pass. Standalone demo: weak server 14 findings, hardened server 0.
