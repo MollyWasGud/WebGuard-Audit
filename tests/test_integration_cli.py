@@ -11,9 +11,12 @@ from demo.servers import HardenedHandler, WeakHandler, start
 
 
 def _run(monkeypatch, tmp_path, url):
-    # The real scope allows only 127.0.0.1:8000; tests approve their own random loopback port.
-    origin = ("http", url.split("//")[1].rstrip("/"))
-    monkeypatch.setattr(scope_validator, "APPROVED_SCOPE", {origin})
+    # Each fixture registers its own loopback port.
+    authority = url.removeprefix("http://").rstrip("/")
+    host, _, port = authority.rpartition(":")
+    monkeypatch.setattr(
+        scope_validator, "APPROVED_SCOPE", {("http", authority): (host, int(port))}
+    )
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["main.py", "--target", url])
     monkeypatch.setattr(cli, "confirm_authorization", lambda _: True)

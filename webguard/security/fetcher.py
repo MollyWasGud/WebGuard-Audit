@@ -7,18 +7,18 @@ from demo.loopback_fetch import (
     MAX_BODY_BYTES,
     TIMEOUT_SECONDS,
     FetchRefused,
-    _check_target,
 )
 from webguard.core.models import ResponseData
 from webguard.security.dialer import AuthorizedTransport
-from webguard.security.scope_validator import approved_origin
+from webguard.security.scope_validator import approved_http_endpoint
 
 
 def fetch(url: str, *, transport: AuthorizedTransport | None = None) -> ResponseData:
     """Fetch one approved loopback resource and refuse redirect responses."""
-    if approved_origin(url) is None:
+    endpoint = approved_http_endpoint(url)
+    if endpoint is None:
         raise FetchRefused("Target is outside the approved scope")
-    host, port, path = _check_target(url)
+    host, port = endpoint
     if transport is None:
         transport = AuthorizedTransport(
             "http", host, port, host, deadline=monotonic() + TIMEOUT_SECONDS
@@ -31,7 +31,7 @@ def fetch(url: str, *, transport: AuthorizedTransport | None = None) -> Response
         peer.settimeout(transport.checkpoint(TIMEOUT_SECONDS))
         conn.request(
             "GET",
-            path,
+            "/",
             headers={"User-Agent": "WebGuard-demo", "Accept-Encoding": "identity"},
         )
         peer.settimeout(transport.checkpoint(TIMEOUT_SECONDS))

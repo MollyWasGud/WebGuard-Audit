@@ -264,6 +264,135 @@ def test_cli_fetch_dials_approved_peer_and_audits_valid_response(monkeypatch, tm
     head.connect.assert_called_once_with(("127.0.0.1", 8000))
 
 
+@pytest.mark.parametrize("target", [TARGET, TARGET + "/"])
+def test_fetch_requests_root_without_reparsing_with_demo_fetcher(monkeypatch, target):
+    import io
+
+    from demo import loopback_fetch
+    from webguard.security.fetcher import fetch
+
+    peer = Mock()
+    peer.makefile.return_value = io.BytesIO(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+    )
+    factory = Mock(return_value=peer)
+    resolver = Mock()
+    monkeypatch.setattr(socket, "socket", factory)
+    monkeypatch.setattr(socket, "getaddrinfo", resolver)
+    monkeypatch.setattr(
+        loopback_fetch,
+        "urlsplit",
+        Mock(side_effect=AssertionError("Production fetch used the demo parser")),
+    )
+
+    response = fetch(target)
+
+    assert (response.url, response.status, response.body) == (target, 200, "ok")
+    assert response.get("Content-Length") == "2"
+    request = peer.sendall.call_args.args[0]
+    assert request.startswith(b"GET / HTTP/1.1\r\n")
+    assert b"\r\nHost: 127.0.0.1:8000\r\n" in request
+    factory.assert_called_once()
+    peer.connect.assert_called_once_with(("127.0.0.1", 8000))
+    resolver.assert_not_called()
+    peer.close.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "https://127.0.0.1:8443",
+        "http://127.0.0.1:8001",
+        "http://localhost:8000",
+        TARGET + "/other",
+        TARGET + "/?query=1",
+        TARGET + "/#section",
+        "http://user:password@127.0.0.1:8000",
+        "http://127.0.0.1:invalid",
+        TARGET + "\x00",
+    ],
+)
+def test_fetch_rejects_unapproved_input_before_connection(monkeypatch, target):
+    from webguard.security.fetcher import FetchRefused, fetch
+
+    connection = Mock()
+    factory = Mock()
+    resolver = Mock()
+    monkeypatch.setattr(http.client, "HTTPConnection", connection)
+    monkeypatch.setattr(socket, "socket", factory)
+    monkeypatch.setattr(socket, "getaddrinfo", resolver)
+
+    with pytest.raises(FetchRefused):
+        fetch(target)
+
+    connection.assert_not_called()
+    factory.assert_not_called()
+    resolver.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("scheme", "host", "port"),
+    [
+        ("https", "127.0.0.1", 8000),
+        ("http", "127.0.0.2", 8000),
+        ("http", "127.0.0.1", 8001),
+    ],
+)
+def test_fetch_refuses_mismatched_transport_before_dial(monkeypatch, scheme, host, port):
+    from webguard.security.dialer import AuthorizedTransport, UnauthorizedDial
+    from webguard.security.fetcher import fetch
+
+    factory = Mock()
+    resolver = Mock()
+    monkeypatch.setattr(socket, "socket", factory)
+    monkeypatch.setattr(socket, "getaddrinfo", resolver)
+    transport = AuthorizedTransport(scheme, host, port, host)
+
+    with pytest.raises(UnauthorizedDial):
+        fetch(TARGET, transport=transport)
+
+    factory.assert_not_called()
+    resolver.assert_not_called()
+
+
+def test_fetch_dial_failure_has_no_resolution_or_fallback(monkeypatch):
+    from webguard.security.fetcher import fetch
+
+    factory = Mock()
+    peer = factory.return_value
+    peer.connect.side_effect = ConnectionRefusedError
+    resolver = Mock()
+    monkeypatch.setattr(socket, "socket", factory)
+    monkeypatch.setattr(socket, "getaddrinfo", resolver)
+
+    with pytest.raises(ConnectionRefusedError):
+        fetch(TARGET)
+
+    factory.assert_called_once()
+    peer.connect.assert_called_once_with(("127.0.0.1", 8000))
+    peer.sendall.assert_not_called()
+    resolver.assert_not_called()
+    peer.close.assert_called_once()
+
+
+def test_fetch_bounds_response_body_and_closes_resources(monkeypatch):
+    from webguard.security.fetcher import MAX_BODY_BYTES, fetch
+
+    connection = Mock()
+    response = connection.getresponse.return_value
+    response.status = 200
+    response.read.return_value = b"body"
+    response.getheaders.return_value = []
+    factory = Mock()
+    monkeypatch.setattr(socket, "socket", factory)
+    monkeypatch.setattr(http.client, "HTTPConnection", Mock(return_value=connection))
+
+    assert fetch(TARGET).body == "body"
+    response.read.assert_called_once_with(MAX_BODY_BYTES)
+    response.close.assert_called_once()
+    connection.close.assert_called_once()
+
+
 def test_authorized_http_redirect_refuses_destination(monkeypatch):
     import io
 
@@ -333,5 +462,30 @@ def test_fetch_cancellation_after_dial_prevents_request(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         fetch(TARGET, transport=transport)
     peer.connect.assert_called_once_with(("127.0.0.1", 8000))
+    peer.sendall.assert_not_called()
+    peer.close.assert_called_once()
+
+
+def test_fetch_expired_deadline_after_dial_prevents_request(monkeypatch):
+    from webguard.security import dialer
+    from webguard.security.fetcher import fetch
+
+    clock = Mock(return_value=0)
+    monkeypatch.setattr(dialer, "monotonic", clock)
+    transport = dialer.AuthorizedTransport(
+        "http", "127.0.0.1", 8000, "127.0.0.1", deadline=1
+    )
+    peer = Mock()
+    monkeypatch.setattr(socket, "socket", Mock(return_value=peer))
+
+    def expire(*args):
+        clock.return_value = 1
+
+    peer.connect.side_effect = expire
+
+    with pytest.raises(TimeoutError, match="Audit deadline expired"):
+        fetch(TARGET, transport=transport)
+
+    peer.settimeout.assert_called_once_with(1)
     peer.sendall.assert_not_called()
     peer.close.assert_called_once()
