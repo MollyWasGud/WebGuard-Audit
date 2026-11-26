@@ -1,7 +1,8 @@
-"""Shared data contract between WebGuard modules.
+"""Shared models for HTTP response data and scored findings.
 
-Member 4 (CLI/ethics) fetches a page AFTER scope validation and builds a ResponseData.
-Members 1 and 2 turn it into Findings. Member 3 scores and reports the Findings.
+Member 1 converts ResponseData into Finding objects. Member 2 supplies typed
+auditor results, which the integration layer validates before mapping to findings.
+Member 3 scores and reports the combined findings for one target.
 """
 
 from __future__ import annotations

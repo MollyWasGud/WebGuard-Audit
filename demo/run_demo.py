@@ -7,9 +7,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from demo.loopback_fetch import fetch  # noqa: E402
-from demo.servers import HardenedHandler, WeakHandler, start  # noqa: E402
-from webguard.auditors.http_audit import audit, summarize  # noqa: E402
+from demo.loopback_fetch import fetch
+from demo.servers import HardenedHandler, WeakHandler, start
+from webguard.auditors.http_audit import audit, summarize
 
 
 def show(label: str, handler) -> dict:
