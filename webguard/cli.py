@@ -24,17 +24,17 @@ HTTP_POLICIES = {"POL-002", "POL-003", "POL-004", "POL-005", "POL-006", "POL-007
 _AUDIT_BUDGET = 20.0
 
 
-def _operation_plan(scheme: str):
+def _operation_plan(scheme: str) -> list[tuple[str, str]]:
     if scheme == "http":
-        return (
+        return [
             ("http_headers", "HTTP security header analysis"),
             ("http_redirect", "First-hop HTTP redirect assessment"),
-        )
-    return (
+        ]
+    return [
         ("tls_certificate", "Certificate and verified TLS connectivity"),
         ("tls_protocols", "Modern TLS protocol assessment"),
         ("http_redirect", "HTTPS availability and first-hop redirect assessment"),
-    )
+    ]
 
 
 def run_audit(target: str) -> int:

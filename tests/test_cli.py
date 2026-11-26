@@ -11,6 +11,30 @@ from webguard import cli
 TARGET = "http://127.0.0.1:8000"
 
 
+@pytest.mark.parametrize(
+    ("scheme", "expected"),
+    [
+        (
+            "http",
+            [
+                ("http_headers", "HTTP security header analysis"),
+                ("http_redirect", "First-hop HTTP redirect assessment"),
+            ],
+        ),
+        (
+            "https",
+            [
+                ("tls_certificate", "Certificate and verified TLS connectivity"),
+                ("tls_protocols", "Modern TLS protocol assessment"),
+                ("http_redirect", "HTTPS availability and first-hop redirect assessment"),
+            ],
+        ),
+    ],
+)
+def test_operation_plan_returns_ordered_list(scheme, expected):
+    assert cli._operation_plan(scheme) == expected
+
+
 def test_unapproved_target(monkeypatch):
     monkeypatch.setattr(
         sys, "argv",
