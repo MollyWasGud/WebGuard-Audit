@@ -751,8 +751,10 @@ def local_tls_server(local_tls_certificate, request, monkeypatch):
                 if close_first:
                     peer, address = listener.accept()
                     with peer:
-                        assert address[0] == _LOOPBACK
-                    assert peer.fileno() == -1
+                        if address[0] != _LOOPBACK:
+                            raise RuntimeError("Unexpected peer address")
+                    if peer.fileno() != -1:
+                        raise RuntimeError("Peer socket was not closed")
                     seen.append(None)
                 for _ in range(connection_count - len(seen)):
                     seen.append(

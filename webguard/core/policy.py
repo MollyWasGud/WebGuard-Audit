@@ -69,7 +69,7 @@ def generate_compliance_summary(
 ) -> dict:
     """Generate a summary of all security policies."""
     results = []
-    counts = {status: 0 for status in POLICY_STATUS}
+    counts = dict.fromkeys(POLICY_STATUS, 0)
 
     for policy_id, name in POLICIES.items():
         status = evaluate_policy(

@@ -66,7 +66,7 @@ def classify_risk(findings: list[Finding]) -> str:
 
 def count_severities(findings: list[Finding]) -> dict[str, int]:
     """Count unique findings by severity level."""
-    counts = {severity: 0 for severity in SEVERITY_WEIGHTS}
+    counts = dict.fromkeys(SEVERITY_WEIGHTS, 0)
 
     for finding in remove_duplicates(findings):
         severity = finding.severity.strip().upper()
