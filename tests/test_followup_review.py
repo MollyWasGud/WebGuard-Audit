@@ -52,9 +52,9 @@ def test_default_port_is_still_80_and_loopback_rules_stay():
 def test_disclosure_evidence_is_allowlisted():
     cases = {
         "token/1abc123SECRET": "Server",                      # unknown product: only the header name is shown
-        "Apache/2.4.1 secret/9.9.9": "Server: Apache/2.4.1",  # unknown product dropped
+        "Apache/2.4.1 secret/9.9.9": "Server: apache",       # retain only the allowlisted product
         "Apache/2.4.1-SECRET": "Server",                      # version is not strictly numeric
-        "nginx/1.18.0": "Server: nginx/1.18.0",
+        "nginx/1.18.0": "Server: nginx",
     }
     for value, expected in cases.items():
         finding = one(audit(make([("Server", value)])), "DISC:server")
@@ -153,3 +153,136 @@ def test_not_a_real_private_ip_gives_no_finding(value):
 def test_real_private_ip_gives_finding_with_header_name_only(value):
     finding = one(audit(make([("X-Backend", value)])), "DISC:internal-ip")
     assert finding.evidence == "X-Backend"
+
+
+def test_m1_02_disclosure_markers_are_not_reported(monkeypatch, tmp_path):
+    from webguard.core.audit_integration import integrate_audit_results
+    from webguard.reporting.html_report import generate_html_report
+    from webguard.reporting.json_report import generate_json_report
+
+    version = "314.159.265"
+    header_name = "X-SYNTH-M1-PRIVATE-MARKER"
+    findings = audit(make([("Server", f"APACHE/{version}"), (header_name, "10.1.2.3")]))
+    assert one(findings, "DISC:server").evidence == "Server: apache"
+    assert one(findings, "DISC:internal-ip").evidence == "Private IPv4 address detected"
+
+    monkeypatch.chdir(tmp_path)
+    result = integrate_audit_results(findings, [], {"POL-007"})
+    json_text = generate_json_report(result).read_text(encoding="utf-8")
+    html_text = generate_html_report(result).read_text(encoding="utf-8")
+    report = json.loads(json_text)
+    json.dumps(report, allow_nan=False)
+    assert {"DISC:server", "DISC:internal-ip"} <= {
+        item["check_id"] for item in report["findings"]
+    }
+    assert "Internal IP address in a response header" in html_text
+    evidence = json.dumps([finding.to_dict() for finding in findings])
+    for marker in (version, header_name, "10.1.2.3"):
+        assert all(marker not in text for text in (evidence, json_text, html_text))
+
+
+@pytest.mark.parametrize(
+    ("value", "invalid"),
+    [
+        pytest.param("31536000", False, id="unquoted"),
+        pytest.param('"31536000"', False, id="quoted"),
+        pytest.param('"' + "9" * 12 + '"', False, id="local-limit"),
+        pytest.param('"' + "9" * 13 + '"', True, id="over-local-limit"),
+        pytest.param('"31536000', True, id="opening-quote-only"),
+        pytest.param('31536000"', True, id="closing-quote-only"),
+        pytest.param('""31536000""', True, id="repeated-quotes"),
+        pytest.param('"31"536000"', True, id="embedded-quote"),
+    ],
+)
+def test_m1_03_hsts_max_age_requires_one_balanced_quote_pair(value, invalid):
+    found = ids(audit(make([("Strict-Transport-Security", f"max-age={value}")])))
+    assert ("HDR:hsts-invalid" in found) is invalid
+
+
+def test_m1_03_hsts_invalid_wording_describes_local_validation():
+    value = "max-age=" + "9" * 13
+    finding = one(
+        audit(make([("Strict-Transport-Security", value)])), "HDR:hsts-invalid"
+    )
+    assert "this auditor" in finding.detail.lower()
+    assert "12" in finding.detail
+
+
+@pytest.mark.parametrize(
+    ("policy", "reported"),
+    [
+        pytest.param(
+            "default-src 'unsafe-eval'; script-src-elem 'self'; script-src-attr 'self'",
+            True,
+            id="default-fallback",
+        ),
+        pytest.param(
+            "script-src 'unsafe-eval'; script-src-elem 'self'; script-src-attr 'self'",
+            True,
+            id="script-directive",
+        ),
+        pytest.param(
+            "script-src 'self'; script-src-elem 'unsafe-eval'", False, id="element-only"
+        ),
+        pytest.param(
+            "script-src 'self'; script-src-attr 'unsafe-eval'",
+            False,
+            id="attribute-only",
+        ),
+        pytest.param(
+            "default-src 'unsafe-eval'; script-src 'self'",
+            False,
+            id="script-overrides-default",
+        ),
+    ],
+)
+def test_m1_04_csp_eval_uses_script_and_default_sources(policy, reported):
+    assert ("CSP:unsafe-eval" in ids(check_csp(csp(policy)))) is reported
+
+
+def test_m1_04_csp_attribute_wildcard_is_not_a_network_source():
+    found = ids(check_csp(csp("script-src 'self'; script-src-attr *")))
+    assert "CSP:wildcard" not in found
+    assert "CSP:wildcard" in ids(
+        check_csp(csp("script-src-elem *; script-src-attr 'none'"))
+    )
+
+
+@pytest.mark.parametrize(
+    ("policy", "context"),
+    [
+        pytest.param(
+            "script-src 'self'; script-src-elem 'unsafe-inline'",
+            "script elements",
+            id="elements",
+        ),
+        pytest.param(
+            "script-src 'self'; script-src-attr 'unsafe-inline'",
+            "event-handler attributes",
+            id="attributes",
+        ),
+    ],
+)
+def test_m1_04_csp_inline_finding_names_its_context(policy, context):
+    finding = one(check_csp(csp(policy)), "CSP:unsafe-inline")
+    assert context in finding.title
+
+
+def test_m1_05_referrer_warning_distinguishes_downgrade():
+    response = make(
+        [
+            ("Referrer-Policy", "no-referrer"),
+            ("Referrer-Policy", "no-referrer-when-downgrade, unknown"),
+        ]
+    )
+    finding = one(audit(response), "HDR:referrer-weak")
+    assert finding.severity == "LOW"
+    assert finding.evidence == "no-referrer-when-downgrade"
+    assert "same security level" in finding.detail
+    assert "omits" in finding.detail and "HTTPS-to-HTTP" in finding.detail
+
+
+def test_m1_02_internal_ip_uses_fixed_evidence_for_unlisted_header():
+    response = make([("X-SYNTH-M1-PRIVATE-MARKER", "10.1.2.3")])
+    finding = one(audit(response), "DISC:internal-ip")
+    assert finding.evidence == "Private IPv4 address detected"
