@@ -67,7 +67,7 @@ def test_normal_execution(monkeypatch):
         cli, "confirm_authorization", lambda _: True
     )
 
-    audit = Mock()
+    audit = Mock(return_value=0)
     monkeypatch.setattr(cli, "run_audit", audit)
 
     assert cli.main() == 0
