@@ -5,9 +5,10 @@ from unittest.mock import Mock
 
 from test_report_adapter import http_probe
 
+from webguard import cli
 from webguard.auditors import https
 from webguard.core.audit_integration import integrate_audit_results
-from webguard.core.models import Finding
+from webguard.core.models import Finding, ResponseData
 from webguard.reporting.html_report import generate_html_report
 from webguard.reporting.json_report import generate_json_report
 from webguard.reporting.sanitizer import sanitize_text
@@ -148,6 +149,97 @@ def test_rejected_tls_input_is_visible_in_reports(tmp_path, monkeypatch):
     assert marker not in json_text + html_text
     assert "&lt;script&gt;inert&lt;/script&gt;" in html_text
     assert "<script>inert</script>" not in html_text
+
+
+def test_http_only_cli_reports_tls_unassessed(tmp_path, monkeypatch):
+    import io
+    import re
+    import socket
+
+    from webguard.auditors import report_adapter, tls
+
+    monkeypatch.chdir(tmp_path)
+    target = "http://127.0.0.1:8000"
+    destination = "https://127.0.0.1:8443/"
+    fetch = Mock(return_value=ResponseData(target, 200, []))
+    monkeypatch.setattr(cli, "fetch", fetch)
+
+    peer = Mock()
+    peer.makefile.return_value = io.BytesIO(
+        f"HTTP/1.1 302 Found\r\nLocation: {destination}\r\nContent-Length: 0\r\n\r\n".encode()
+    )
+    socket_factory = Mock(return_value=peer)
+    resolve = Mock(side_effect=AssertionError("Unexpected DNS resolution"))
+    monkeypatch.setattr(socket, "socket", socket_factory)
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+    tls_context = Mock(side_effect=AssertionError("Unexpected TLS context"))
+    monkeypatch.setattr(tls, "_create_verified_client_context", tls_context)
+    monkeypatch.setattr(https, "_create_verified_client_context", tls_context)
+
+    redirect = Mock(wraps=https.audit_http_redirect)
+    adapt = Mock(wraps=report_adapter.to_safe_audit_report)
+    monkeypatch.setattr(https, "audit_http_redirect", redirect)
+    monkeypatch.setattr(report_adapter, "to_safe_audit_report", adapt)
+
+    assert cli.run_audit(target) == 0
+
+    transport = fetch.call_args.kwargs["transport"]
+    assert (transport.scheme, transport.hostname, transport.port, transport.peer) == (
+        "http",
+        "127.0.0.1",
+        8000,
+        "127.0.0.1",
+    )
+    fetch.assert_called_once_with(target, transport=transport)
+    redirect.assert_called_once_with(
+        "127.0.0.1", 8000, source_scheme="http", transport=transport
+    )
+    socket_factory.assert_called_once()
+    peer.connect.assert_called_once_with(("127.0.0.1", 8000))
+    peer.sendall.assert_called_once()
+    wire = peer.sendall.call_args.args[0]
+    assert wire.startswith(b"HEAD / HTTP/1.1\r\n")
+    assert b"Host: 127.0.0.1:8000\r\n" in wire
+    resolve.assert_not_called()
+    tls_context.assert_not_called()
+    adapt.assert_called_once()
+    kind, raw = adapt.call_args.args
+    assert kind == "http_redirect"
+    assert raw["source"] == {"scheme": "http", "hostname": "127.0.0.1", "port": 8000}
+    assert raw["redirect"]["destination"] == {
+        "scheme": "https",
+        "hostname": "127.0.0.1",
+        "port": 8443,
+        "verification": "not_attempted",
+    }
+
+    (report_path,) = (tmp_path / "reports").glob("*.json")
+    (html_path,) = (tmp_path / "reports").glob("*.html")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    html = html_path.read_text(encoding="utf-8")
+    assert report["findings"]
+    assert report["audit_coverage"] == [
+        {
+            "audit_kind": "http_redirect",
+            "coverage_status": "COMPLETED",
+            "data_quality_issues": 0,
+            "redirect_outcome": "upgrade",
+            "probe_outcome": "available",
+            "destination_verification": "not_attempted",
+        },
+        {
+            "audit_kind": f"Audit scope: {target}",
+            "coverage_status": "COMPLETED",
+            "data_quality_issues": 0,
+        },
+    ]
+    policy = report["compliance_summary"]["policy_results"][-1]
+    assert (policy["policy_id"], policy["status"]) == ("POL-009", "NOT_CHECKED")
+    assert ">upgrade<" in html and ">not_attempted<" in html
+    assert re.search(
+        r"<td>POL-009</td>\s*<td>TLS and HTTPS Security</td>\s*<td class=\"NOT_CHECKED\">",
+        html,
+    )
 
 
 def test_redirect_reports_use_first_hop_outcomes_without_location_data(

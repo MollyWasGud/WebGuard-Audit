@@ -1,49 +1,36 @@
 
 """Scope validation safeguards for WebGuard Audit."""
 
+from unicodedata import category
 from urllib.parse import urlsplit
 
-# Approved targets for local development and testing.
 APPROVED_SCOPE = {
     ("http", "127.0.0.1:8000"),
+    ("https", "127.0.0.1:8443"),
 }
 
 
-def validate_target(target: str) -> bool:
-    """Check whether a target is within the approved scope."""
-
-    if not target or any(c.isspace() for c in target):
-        return False
-
-    if "\\" in target:
-        return False
-
+def approved_origin(target: str) -> str | None:
+    """Return the display origin only for a valid, approved target."""
+    if not target or any(c.isspace() or category(c) in {"Cc", "Cf"} for c in target):
+        return None
+    if any(delimiter in target for delimiter in "\\?#"):
+        return None
     try:
         parsed = urlsplit(target)
-
-        # Only allow HTTP and HTTPS.
-        if parsed.scheme not in ("http", "https"):
-            return False
-
-        # Reject missing hostnames.
-        if not parsed.hostname:
-            return False
-
-        # Reject URLs containing login credentials.
-        if parsed.username is not None or parsed.password is not None:
-            return False
-
-        # Initially allow only the approved root URL.
-        if parsed.path not in ("", "/"):
-            return False
-
-        if parsed.query or parsed.fragment:
-            return False
-
-        # Check the exact scheme, hostname and port.
+        if (
+            parsed.scheme not in ("http", "https")
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in ("", "/")
+        ):
+            return None
         origin = (parsed.scheme, parsed.netloc.lower())
-
-        return origin in APPROVED_SCOPE
-
+        return f"{origin[0]}://{origin[1]}" if origin in APPROVED_SCOPE else None
     except ValueError:
-        return False
+        return None
+
+
+def validate_target(target: str) -> bool:
+    return approved_origin(target) is not None
