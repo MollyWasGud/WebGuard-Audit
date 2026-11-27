@@ -11,6 +11,39 @@ project policies, and writes local reports with prioritised remediation.
 | [3. Compliance and Reporting](docs/MODULE3_WRITEUP.md) | Adapts transport results, maps and deduplicates findings, tracks coverage, scores risk, and generates reports. |
 | 4. CLI and Ethical Safeguards | Validates the origin, prompts for authorisation, binds network operations to the approved peer, and runs the audit plan. |
 
+## Attack category and ethical hacking lifecycle
+
+**Attack category: Auditing.** WebGuard Audit performs configuration and
+transport-security assessments, not exploitation.
+
+| Lifecycle stage | Tool contribution |
+| --- | --- |
+| Planning and authorisation | Confirm the permitted origin and obtain explicit permission for each invocation. |
+| Reconnaissance | Collect limited HTTP response or TLS connection metadata from the approved local service. |
+| Scanning and enumeration | Inspect HTTP headers, cookie attributes, CSP, disclosure evidence, certificates, modern TLS protocols and first-hop redirect intent according to the selected scheme. |
+| Gaining access / exploitation | Not performed; exploitation is outside the tool's authorised scope. |
+| Maintaining access | Not performed; no persistence or privilege escalation. |
+| Covering tracks | Not performed; preserve audit evidence in labelled local reports. |
+| Reporting and remediation | Map observed findings to project policies, distinguish incomplete coverage, score risk and recommend corrections. |
+
+### Architecture
+
+```mermaid
+flowchart TD
+    A["Target URL"] --> B["Module 4: CLI, scope and authorisation"]
+    B --> C{"Selected scheme"}
+    C -->|HTTP| D["Module 1: HTTP security checks"]
+    C -->|HTTPS| E["Module 2: TLS and HTTPS checks"]
+    C -->|HTTP| F["Module 2: First-hop redirect assessment"]
+    D --> G["Module 3: Compliance, coverage and risk scoring"]
+    E --> G
+    F --> G
+    G --> H["Local HTML and JSON reports"]
+```
+
+Dry runs stop after displaying the plan. Live operations use the authorised
+transport; the diagram does not imply identical HTTP and HTTPS coverage.
+
 ## Setup
 
 From the repository root in Windows PowerShell, create an environment for a new
@@ -59,6 +92,45 @@ The live CLI uses a shared 20-second budget and applies remaining time at
 transport checkpoints. Ctrl+C cancels when Python delivers the interrupt.
 Cooperative checks cannot guarantee immediate interruption of Windows I/O
 already blocked in the operating system.
+
+## Legal disclaimer and ethical considerations
+
+WebGuard Audit is intended only for authorised educational security auditing.
+Users must comply with applicable law, including Malaysia's Computer Crimes
+Act 1997 (Act 563). Do not use this tool for unauthorised access or testing.
+Obtain explicit permission from the system owner before any audit; the CLI
+confirmation is not a substitute for actual permission.
+
+Scope checks, verified certificate and hostname validation, source-only
+redirect checks, a bounded audit budget and dry-run mode reduce the risk of
+unintended activity. Incomplete assessments are reported as such rather than
+being treated as confirmed compliance.
+
+## Rules of Engagement (RoE)
+
+| Requirement | Rules |
+| --- | --- |
+| Authorised scope | Only the exact local origins `http://127.0.0.1:8000` and `https://127.0.0.1:8443` that the operator owns or has explicit permission to assess. |
+| Time window | Agree the start and end of the laboratory or demonstration session with the system owner before testing. Run only inside that approved window; obtain fresh approval if it changes. The 20-second per-run audit budget is a separate technical limit, not permission to test. |
+| Permitted techniques | Bounded HTTP GET and HEAD requests to the approved origin, verified TLS handshakes, certificate inspection, modern protocol probes and first-hop redirect classification. |
+| Prohibited actions | External or out-of-scope scanning, exploitation, brute force, denial of service, persistence, data exfiltration, disabling certificate verification and following redirect destinations. |
+| Emergency stop | Press Ctrl+C to cancel. Stop immediately if authorisation is withdrawn, scope is uncertain or unintended activity occurs. The CLI handles the interrupt with exit code 130 when delivered; blocked OS I/O may delay cancellation. |
+| Data handling | Keep reports in the local `reports/` directory, restrict access to authorised participants, review/redact sensitive evidence before sharing and retain it only as agreed with the owner. Do not collect credentials or unnecessary personal data. |
+
+## Responsible disclosure
+
+- **Who:** Privately notify the authorised system owner or designated security
+  team using their verified reporting channel; for issues in this project,
+  contact the maintainers privately through an agreed channel.
+- **When:** Report promptly after safe validation, within the agreed engagement
+  schedule. Escalate urgent findings to the owner without further intrusive
+  testing.
+- **How:** Provide the affected approved origin, observed evidence, severity,
+  impact, assessment limitations and remediation advice. Redact sensitive data,
+  use an appropriate secure channel and coordinate any retest with the owner.
+- **Confidentiality:** Do not post sensitive findings publicly, share credentials
+  or extend testing without permission. Agree disclosure timing and retention
+  with the owner; respect applicable law.
 
 ## Reports and exit codes
 

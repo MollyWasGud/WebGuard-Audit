@@ -159,3 +159,38 @@ def test_exact_origin_blocks_secondary_targets(monkeypatch, target):
     assert cli.main() == 1
     auth.assert_not_called()
     audit.assert_not_called()
+
+
+def test_startup_legal_disclaimer_before_authorization(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--target", TARGET])
+    audit = Mock()
+    monkeypatch.setattr(cli, "run_audit", audit)
+
+    def deny_authorization(_):
+        out = capsys.readouterr().out
+        assert "LEGAL DISCLAIMER" in out
+        assert "Computer Crimes Act 1997 (Act 563)" in out
+        assert "authorized security auditing only" in out
+        return "no"
+
+    monkeypatch.setattr("builtins.input", deny_authorization)
+    assert cli.main() == 1
+    audit.assert_not_called()
+
+
+def test_help_includes_approved_usage_examples(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--help"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "python main.py --target http://127.0.0.1:8000" in out
+    assert "python main.py --target https://127.0.0.1:8443 --dry-run" in out
+
+
+def test_release_version(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--version"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == "WebGuard Audit 1.0.0"

@@ -148,7 +148,13 @@ def main():
 def execute_cli():
     parser = argparse.ArgumentParser(
         prog="WebGuard Audit",
-        description="Web Server and TLS Security Compliance Scanner"
+        description="Web Server and TLS Security Compliance Scanner",
+        epilog=(
+            "Examples:\n"
+            "  python main.py --target http://127.0.0.1:8000\n"
+            "  python main.py --target https://127.0.0.1:8443 --dry-run"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
     parser.add_argument(
@@ -174,6 +180,11 @@ def execute_cli():
     print("\n==========================")
     print("      WEBGUARD AUDIT")
     print("==========================")
+
+    print("\n=== LEGAL DISCLAIMER ===")
+    print("This tool is intended for authorized security auditing only.")
+    print("Users must comply with Malaysia's Computer Crimes Act 1997 (Act 563).")
+    print("Unauthorized access and misuse are prohibited.")
 
     # Validate target scope.
     origin = approved_origin(args.target)
